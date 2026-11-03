@@ -6,7 +6,10 @@ export interface LoadedActivity {
   kind: "fit" | "gpx";
   fileName: string;
   points: TrackPoint[];
-  /** Builds the fixed file and checks nothing but positions (and distance/speed) changed. */
+  /**
+   * Builds the fixed file and checks nothing but positions (and distance/speed)
+   * changed, and that added points became new samples with only a time and a position.
+   */
   build(points: TrackPoint[]): { data: Uint8Array; problems: string[] };
   /** Total distance in metres for these points, as the fixed file would report it. */
   distance(points: TrackPoint[]): number | null;
@@ -45,11 +48,15 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
       points: parsed.points,
       build(points) {
         const data = writeFit(raw, parsed, points);
-        return { data, problems: verifyFit(raw, data, parsed) };
+        const added = points.filter((p) => p.added).length;
+        return { data, problems: verifyFit(raw, data, parsed, added) };
       },
       distance(points) {
+        const data = writeFit(raw, parsed, points);
+        // Added points shift everything in the file, so read it again.
+        const reported = reportedDistance(data, points.some((p) => p.added) ? parseFit(data) : parsed);
         // Falls back to the GPS track length if the file stores no distance.
-        return reportedDistance(writeFit(raw, parsed, points), parsed) ?? trackLength(points);
+        return reported ?? trackLength(points);
       },
     };
   }
@@ -62,7 +69,7 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
       points: parsed.points,
       build(points) {
         const fixed = writeGpx(text, parsed, points);
-        return { data: new TextEncoder().encode(fixed), problems: verifyGpx(text, fixed, parsed) };
+        return { data: new TextEncoder().encode(fixed), problems: verifyGpx(text, fixed, parsed, points) };
       },
       // GPX files don't store distance; Strava measures it from the track.
       distance: trackLength,

@@ -19,7 +19,10 @@
  */
 
 import { buildDistanceModel } from "./distance";
+import { buildSegment, checksumProblems, concat, fitCrc, isFit, readMessages, walkFit, type RawMessage } from "./fitbytes";
 import { stepDistances, type TrackPoint } from "./track";
+
+export { fitCrc, isFit };
 
 export const SESSION_MESG = 18;
 export const LAP_MESG = 19;
@@ -105,35 +108,6 @@ interface MesgDef {
   littleEndian: boolean;
   fields: FieldDef[];
   devFieldsSize: number;
-}
-
-const CRC_TABLE = [
-  0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401, 0xa001,
-  0x6c00, 0x7800, 0xb401, 0x5000, 0x9c01, 0x8801, 0x4400,
-];
-
-export function fitCrc(bytes: Uint8Array, start: number, end: number): number {
-  let crc = 0;
-  for (let i = start; i < end; i++) {
-    const byte = bytes[i];
-    let tmp = CRC_TABLE[crc & 0xf];
-    crc = (crc >> 4) & 0x0fff;
-    crc = crc ^ tmp ^ CRC_TABLE[byte & 0xf];
-    tmp = CRC_TABLE[crc & 0xf];
-    crc = (crc >> 4) & 0x0fff;
-    crc = crc ^ tmp ^ CRC_TABLE[(byte >> 4) & 0xf];
-  }
-  return crc;
-}
-
-export function isFit(bytes: Uint8Array): boolean {
-  return (
-    bytes.length >= 12 &&
-    bytes[8] === 0x2e && // .
-    bytes[9] === 0x46 && // F
-    bytes[10] === 0x49 && // I
-    bytes[11] === 0x54 // T
-  );
 }
 
 export function semicirclesToDegrees(value: number): number {
@@ -305,6 +279,17 @@ function writeSlot(view: DataView, slot: Slot, value: number) {
   else view.setUint32(slot.offset, v, slot.littleEndian);
 }
 
+/** A new sample to add to the file, for a point added on the map. */
+interface NewRecord {
+  /** Index (into `parsed.points`) of the recorded point it comes after. */
+  after: number;
+  time: number; // FIT seconds
+  lat: number;
+  lon: number;
+  distance: number | null; // metres
+  speed: number | null; // m/s
+}
+
 /**
  * Returns a copy of the original file with the positions replaced and the
  * distance and speed values that depend on them recalculated.
@@ -315,16 +300,25 @@ function writeSlot(view: DataView, slot: Slot, value: number) {
  * straight-line distance. Steps you didn't touch keep the watch's own
  * distance, which may come from a wheel sensor or foot pod and is often
  * smoother than raw GPS.
+ *
+ * Points marked `added` become new samples (see `addRecords`) holding only a
+ * time, a position, and distance/speed if the file's samples have those.
  */
 export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackPoint[]): Uint8Array {
-  if (points.length !== parsed.slots.length) {
-    throw new Error("Point count changed; points can be moved but not added or removed.");
+  // `kept` maps each recorded point to its place in `points`.
+  const kept: number[] = [];
+  points.forEach((p, j) => {
+    if (!p.added) kept.push(j);
+  });
+  if (kept.length !== parsed.slots.length) {
+    throw new Error("Point count changed; recorded points can be moved but not removed.");
   }
   const out = new Uint8Array(original);
   const view = new DataView(out.buffer);
 
   // 1. Positions.
-  points.forEach((p, i) => {
+  kept.forEach((j, i) => {
+    const p = points[j];
     const slot = parsed.slots[i];
     const lat = p.lat === null || p.lon === null ? INVALID_SINT32 : degreesToSemicircles(p.lat);
     const lon = p.lat === null || p.lon === null ? INVALID_SINT32 : degreesToSemicircles(p.lon);
@@ -333,9 +327,10 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
   });
 
   // 2. Record distance and speed.
-  const changed = points.map(
-    (p, i) => p.lat !== parsed.points[i].lat || p.lon !== parsed.points[i].lon,
-  );
+  // What each point was in the file; added points count as "had no position".
+  const before: TrackPoint[] = points.map((p) => ({ lat: null, lon: null, time: p.time }));
+  kept.forEach((j, i) => (before[j] = parsed.points[i]));
+  const changed = points.map((p, j) => p.lat !== before[j].lat || p.lon !== before[j].lon);
   // A step needs new speed if either of its ends moved (or lost its position).
   const touched = new Array<boolean>(points.length).fill(false);
   let lastValid = -1;
@@ -358,7 +353,14 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
 
   // Each point's time in FIT seconds, so it lines up with record times.
   const pointTimes = new Array<number | null>(points.length).fill(null);
-  for (const rec of parsed.records) if (rec.point >= 0) pointTimes[rec.point] = rec.time;
+  for (const rec of parsed.records) if (rec.point >= 0) pointTimes[kept[rec.point]] = rec.time;
+  points.forEach((p, j) => {
+    if (!p.added) return;
+    if (p.time === null || p.lat === null || p.lon === null) {
+      throw new Error("An added point has no time, because the points around it have no time or position.");
+    }
+    pointTimes[j] = Math.round((p.time - FIT_EPOCH_MS) / 1000);
+  });
 
   // The file's own distance samples (some files keep them in separate records).
   const recorded: { t: number; d: number }[] = [];
@@ -369,11 +371,12 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
   }
   recorded.sort((a, b) => a.t - b.t);
   const model = recorded.length
-    ? buildDistanceModel(parsed.points, points, pointTimes, recorded)
+    ? buildDistanceModel(before, points, pointTimes, recorded)
     : null;
 
   const steps = stepDistances(points);
   const newSpeeds: { time: number | null; speed: number | null }[] = [];
+  const written: { t: number; m: number }[] = [];
   let lastDistance = 0;
   for (const rec of parsed.records) {
     if (model && rec.distance && rec.time !== null && readSlot(view, rec.distance) !== null) {
@@ -381,10 +384,12 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
       const metres = Math.max(lastDistance, model.fixedAt(rec.time));
       writeSlot(view, rec.distance, metres * 100);
       lastDistance = metres;
+      written.push({ t: rec.time, m: metres });
     }
     let speed: number | null = null; // m/s
-    if (rec.point >= 0 && touched[rec.point]) {
-      speed = speedAround(points, steps, rec.point);
+    const j = rec.point >= 0 ? kept[rec.point] : -1;
+    if (j >= 0 && touched[j]) {
+      speed = speedAround(points, steps, j);
       if (speed !== null) {
         if (rec.speed && readSlot(view, rec.speed) !== null) writeSlot(view, rec.speed, speed * 1000);
         if (rec.enhancedSpeed && readSlot(view, rec.enhancedSpeed) !== null)
@@ -397,6 +402,26 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
     }
     newSpeeds.push({ time: rec.time, speed });
   }
+
+  // Values for the new samples of added points.
+  const newRecords: NewRecord[] = [];
+  let after = -1;
+  points.forEach((p, j) => {
+    if (!p.added) {
+      after++;
+      return;
+    }
+    const t = pointTimes[j]!;
+    let distance: number | null = null;
+    if (model) {
+      // Not less than any distance already written at or before this time.
+      const floor = written.reduce((m, w) => (w.t <= t && w.m > m ? w.m : m), 0);
+      distance = Math.max(floor, model.fixedAt(t));
+    }
+    const speed = speedAround(points, steps, j);
+    newRecords.push({ after, time: t, lat: p.lat!, lon: p.lon!, distance, speed });
+    newSpeeds.push({ time: t, speed });
+  });
 
   // 3. Lap and session totals.
   const lastRecordTime = parsed.records.reduce((m, r) => (r.time !== null && r.time > m ? r.time : m), 0);
@@ -434,7 +459,131 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
     }
   }
 
-  return finish(out, view, parsed);
+  const done = finish(out, view, parsed);
+  return newRecords.length ? addRecords(done, parsed, newRecords) : done;
+}
+
+/** Local message number used for added samples (restored afterwards). */
+const NEW_RECORD_LOCAL = 15;
+
+/**
+ * Puts new samples into the file. Each goes after the sample of the recorded
+ * point before it, just before the first later message with a later time, so
+ * the file stays in time order. Every existing message stays as it was.
+ *
+ * A new sample has a timestamp and a position, plus distance and speed if
+ * the file's samples have those. Heart rate, cadence, power, temperature,
+ * elevation and so on are left out: they weren't measured at that moment, and
+ * we don't make up sensor data.
+ */
+function addRecords(bytes: Uint8Array, parsed: ParsedFit, adds: NewRecord[]): Uint8Array {
+  const hasDistance = parsed.records.some((r) => r.distance);
+  const hasSpeed = parsed.records.some((r) => r.speed);
+  const hasEnhancedSpeed = parsed.records.some((r) => r.enhancedSpeed);
+  // [field number, size, FIT base type]
+  const fields: [number, number, number][] = [
+    [FIELD_TIMESTAMP, 4, 0x86],
+    [FIELD_LAT, 4, 0x85],
+    [FIELD_LON, 4, 0x85],
+  ];
+  if (hasDistance) fields.push([RECORD_FIELDS.distance, 4, 0x86]);
+  if (hasSpeed) fields.push([RECORD_FIELDS.speed, 2, 0x84]);
+  if (hasEnhancedSpeed) fields.push([RECORD_FIELDS.enhancedSpeed, 4, 0x86]);
+  const definition = new Uint8Array([
+    0x40 | NEW_RECORD_LOCAL, 0, 0 /* little-endian */, RECORD_MESG & 0xff, RECORD_MESG >> 8,
+    fields.length, ...fields.flat(),
+  ]);
+  const encode = (r: NewRecord) => {
+    const msg = new Uint8Array(1 + fields.reduce((n, f) => n + f[1], 0));
+    const v = new DataView(msg.buffer);
+    msg[0] = NEW_RECORD_LOCAL;
+    v.setUint32(1, r.time, true);
+    v.setInt32(5, degreesToSemicircles(r.lat), true);
+    v.setInt32(9, degreesToSemicircles(r.lon), true);
+    let at = 13;
+    const clamp = (x: number, max: number) => Math.min(max - 1, Math.max(0, Math.round(x)));
+    if (hasDistance) {
+      v.setUint32(at, r.distance === null ? INVALID_UINT32 : clamp(r.distance * 100, INVALID_UINT32), true);
+      at += 4;
+    }
+    if (hasSpeed) {
+      v.setUint16(at, r.speed === null ? INVALID_UINT16 : clamp(r.speed * 1000, INVALID_UINT16), true);
+      at += 2;
+    }
+    if (hasEnhancedSpeed) {
+      v.setUint32(at, r.speed === null ? INVALID_UINT32 : clamp(r.speed * 1000, INVALID_UINT32), true);
+    }
+    return msg;
+  };
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const segments: Uint8Array[] = [];
+  let header: Uint8Array | null = null;
+  let chunks: Uint8Array[] = [];
+  let next = 0; // next sample to add
+  let pointsSeen = 0; // recorded points passed so far
+  let lastTimestamp = 0;
+  // The file's own definition for our local message number, to put back.
+  let localDef: Uint8Array | null = null;
+
+  // Adds the waiting samples that belong before a message with time `t`
+  // (null: no time) that is recorded point `point` (-1: not a point).
+  const flush = (t: number | null, point: number) => {
+    const batch: Uint8Array[] = [];
+    while (
+      next < adds.length &&
+      adds[next].after < pointsSeen &&
+      (point === adds[next].after + 1 || point === Infinity || (t !== null && t > adds[next].time))
+    ) {
+      batch.push(encode(adds[next++]));
+    }
+    if (batch.length) chunks.push(definition, ...batch, ...(localDef ? [localDef] : []));
+  };
+
+  walkFit(bytes, {
+    segment(seg) {
+      header = bytes.slice(seg.start, seg.start + seg.headerSize);
+      chunks = [];
+      localDef = null;
+      lastTimestamp = 0;
+    },
+    definition(_def, localType, start, end) {
+      chunks.push(bytes.subarray(start, end));
+      if (localType === NEW_RECORD_LOCAL) localDef = bytes.subarray(start, end);
+    },
+    data(def, start, end) {
+      // This message's time, as in parseFit.
+      let t: number | null = null;
+      let pos = start + 1;
+      for (const f of def.fields) {
+        if (f.num === FIELD_TIMESTAMP && f.size === 4) t = view.getUint32(pos, def.littleEndian);
+        pos += f.size;
+      }
+      if (t !== null) {
+        lastTimestamp = t;
+      } else if (bytes[start] & 0x80) {
+        const offset = bytes[start] & 0x1f;
+        const base = lastTimestamp & ~0x1f;
+        t = offset >= (lastTimestamp & 0x1f) ? base + offset : base + offset + 0x20;
+        lastTimestamp = t;
+      }
+      const isPoint =
+        def.globalNum === RECORD_MESG &&
+        def.fields.some((f) => f.num === FIELD_LAT && f.size === 4) &&
+        def.fields.some((f) => f.num === FIELD_LON && f.size === 4);
+      flush(t, isPoint ? pointsSeen : -1);
+      chunks.push(bytes.subarray(start, end));
+      if (isPoint) pointsSeen++;
+      // Our samples carry a full timestamp, which later compressed timestamps
+      // count from; since they're never later than the next message, that's fine.
+    },
+    segmentEnd() {
+      flush(null, Infinity);
+      segments.push(buildSegment(header!, chunks));
+    },
+  });
+  if (next < adds.length) throw new Error("Couldn't find where to put an added point in the file.");
+  return concat(segments);
 }
 
 /** Recalculates each FIT segment's checksum. */
@@ -471,8 +620,12 @@ function speedAround(points: TrackPoint[], steps: number[], i: number): number |
  * and the fixed file are positions, GPS-derived distance/speed values and
  * checksums, and that the fixed file's checksums are valid.
  * Returns a list of problems (empty means OK).
+ *
+ * `added` is how many points were added on the map: then the file has new
+ * samples, so it's compared message by message instead (see below).
  */
-export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: ParsedFit): string[] {
+export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: ParsedFit, added = 0): string[] {
+  if (added > 0) return verifyFitWithAdded(original, fixed, added);
   const problems: string[] = [];
   if (original.length !== fixed.length) {
     return ["The fixed file has a different size from the original."];
@@ -511,6 +664,65 @@ export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: Parse
       if (problems.length > 5) break;
     }
   }
+  return problems;
+}
+
+/** Fields a new sample for an added point may have. */
+const NEW_RECORD_FIELDS = new Set<number>([FIELD_TIMESTAMP, FIELD_LAT, FIELD_LON, ...Object.values(RECORD_FIELDS)]);
+
+/**
+ * Safety check for a file with added points. Every message of the original
+ * must still be there, in the same order, with every value identical except
+ * positions, distance and speed. The only new messages allowed are exactly
+ * `added` samples holding nothing but a time, a position, distance and speed
+ * (so no heart rate, power etc. was made up).
+ */
+function verifyFitWithAdded(original: Uint8Array, fixed: Uint8Array, added: number): string[] {
+  let a: RawMessage[];
+  let b: RawMessage[];
+  try {
+    a = readMessages(original);
+    b = readMessages(fixed);
+  } catch {
+    return ["The fixed file can't be read back."];
+  }
+  const problems = checksumProblems(fixed, "fixed");
+  const changeable = new Map<number, Set<number>>([
+    [RECORD_MESG, new Set([FIELD_LAT, FIELD_LON, ...Object.values(RECORD_FIELDS)])],
+    ...[LAP_MESG, SESSION_MESG].map((m) => {
+      const { totalDistance, avgSpeed, maxSpeed, enhancedAvgSpeed, enhancedMaxSpeed } = SUMMARY_FIELDS[m as 18 | 19];
+      return [m, new Set([totalDistance, avgSpeed, maxSpeed, enhancedAvgSpeed, enhancedMaxSpeed])] as [number, Set<number>];
+    }),
+  ]);
+  const same = (x: RawMessage, y: RawMessage) => {
+    if (x.globalNum !== y.globalNum || x.header !== y.header || x.dev !== y.dev) return false;
+    if (x.fields.size !== y.fields.size) return false;
+    const allowed = changeable.get(x.globalNum);
+    for (const [num, value] of x.fields) {
+      if (!y.fields.has(num)) return false;
+      if (y.fields.get(num) !== value && !allowed?.has(num)) return false;
+    }
+    return true;
+  };
+  const isNewSample = (y: RawMessage) =>
+    y.globalNum === RECORD_MESG &&
+    y.header === 0 &&
+    y.dev === "" &&
+    [FIELD_TIMESTAMP, FIELD_LAT, FIELD_LON].every((n) => y.fields.has(n)) &&
+    [...y.fields.keys()].every((n) => NEW_RECORD_FIELDS.has(n));
+
+  let i = 0;
+  let extra = 0;
+  for (const y of b) {
+    if (i < a.length && same(a[i], y)) i++;
+    else if (isNewSample(y)) extra++;
+    else {
+      problems.push(`Message ${i + 1} of the original changed, or something other than a new GPS point was added.`);
+      return problems;
+    }
+  }
+  if (i < a.length) problems.push("Some messages of the original are missing from the fixed file.");
+  if (extra !== added) problems.push(`The fixed file has ${extra} new points, but ${added} were added.`);
   return problems;
 }
 

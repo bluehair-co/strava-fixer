@@ -3,7 +3,16 @@
 import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity";
-import { clearPositions, countChanged, movePoint, straighten, type TrackPoint } from "@/lib/track";
+import {
+  clearPositions,
+  countChanged,
+  deleteAdded,
+  insertPoint,
+  movePoint,
+  retime,
+  straighten,
+  type TrackPoint,
+} from "@/lib/track";
 import type { Selection } from "./MapView";
 import SelectionPanel from "./SelectionPanel";
 import NextSteps from "./NextSteps";
@@ -21,13 +30,18 @@ export default function Editor() {
   const [history, setHistory] = useState<TrackPoint[][]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
+  const [addMode, setAddMode] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
   const points = history[history.length - 1];
 
   const distances = useMemo(() => {
     if (!activity || !points) return null;
-    return { before: activity.distance(activity.points), after: activity.distance(points) };
+    try {
+      return { before: activity.distance(activity.points), after: activity.distance(points) };
+    } catch {
+      return null;
+    }
   }, [activity, points]);
 
   const openFile = async (file: File | undefined) => {
@@ -43,7 +57,8 @@ export default function Editor() {
     }
   };
 
-  const apply = useCallback((next: TrackPoint[]) => setHistory((h) => [...h, next]), []);
+  // Every edit also updates the times of added points (see `retime`).
+  const apply = useCallback((next: TrackPoint[]) => setHistory((h) => [...h, retime(next)]), []);
 
   const onSelect = useCallback((index: number, extend: boolean) => {
     setSelection((sel) => (extend && sel ? { from: sel.from, to: index } : { from: index, to: index }));
@@ -57,6 +72,24 @@ export default function Editor() {
   );
 
   const onBoxSelect = useCallback((from: number, to: number) => setSelection({ from, to }), []);
+
+  const onInsert = useCallback(
+    (after: number, lat: number, lon: number) => {
+      const next = insertPoint(points, after, lat, lon);
+      const added = next[after + 1];
+      if (added.time === null && points.some((p) => p.time !== null)) {
+        setMessage({
+          kind: "error",
+          text: "A point can't be added here: one of the points on either side has no time, so there's no time to give the new point.",
+        });
+        return;
+      }
+      setHistory((h) => [...h, next]);
+      setSelection({ from: after + 1, to: after + 1 });
+      setMessage(null);
+    },
+    [points],
+  );
 
   // The selection as first and last index, whichever way it was made.
   const lo = selection ? Math.min(selection.from, selection.to) : -1;
@@ -87,6 +120,12 @@ export default function Editor() {
     setSelection(null);
   };
 
+  const doDeleteAdded = () => {
+    if (!selection) return;
+    apply(deleteAdded(points, selection.from, selection.to));
+    setSelection(null);
+  };
+
   const download = () => {
     if (!activity) return;
     const { data, problems } = activity.build(points);
@@ -109,7 +148,9 @@ export default function Editor() {
     setMessage({
       kind: "info",
       text:
-        "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.",
+        points.some((p) => p.added)
+          ? "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed, and that the points you added hold only a time and a position."
+          : "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.",
     });
     setShowNextSteps(true);
   };
@@ -144,7 +185,8 @@ export default function Editor() {
     );
   }
 
-  const changed = countChanged(activity.points, points);
+  const { moved, added } = countChanged(activity.points, points);
+  const changed = moved + added;
 
   return (
     <div className={styles.editor}>
@@ -156,17 +198,27 @@ export default function Editor() {
         <button onClick={() => { setHistory([activity.points]); setSelection(null); }} disabled={history.length < 2}>
           Reset
         </button>
+        <button
+          onClick={() => setAddMode((on) => !on)}
+          aria-pressed={addMode}
+          className={addMode ? styles.active : undefined}
+          title="Click on the map to add new points between existing ones"
+        >
+          {addMode ? "Done adding points" : "Add points"}
+        </button>
         <button className={styles.primary} onClick={download} disabled={changed === 0}>
           Download fixed file
         </button>
-        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); }}>Open another file</button>
+        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); }}>Open another file</button>
       </div>
       <p className={styles.status}>
-        {points.length} points · {changed} changed
+        {points.length} points · {moved} changed{added > 0 && ` · ${added} added`}
         {distances?.before != null && distances.after != null &&
           ` · distance ${formatKm(distances.before)}${changed ? ` → ${formatKm(distances.after)}` : ""}`}
-        {" · "}Click a point to select it. Shift-click another point, or hold Shift and drag a box, to select a
-        range. Drag a point to move it.
+        {" · "}
+        {addMode
+          ? "Click on the map to add a point to the nearest stretch of track. Its time is worked out from how far along the stretch it is. Drag points to move them."
+          : "Click a point to select it. Shift-click another point, or hold Shift and drag a box, to select a range. Drag a point to move it."}
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
       {showNextSteps && <NextSteps onClose={() => setShowNextSteps(false)} />}
@@ -179,6 +231,8 @@ export default function Editor() {
             onSelect={onSelect}
             onBoxSelect={onBoxSelect}
             onMove={onMove}
+            addMode={addMode}
+            onInsert={onInsert}
           />
         </div>
         {selection && (
@@ -191,6 +245,7 @@ export default function Editor() {
             onExtend={extendSelection}
             onStraighten={doStraighten}
             onRemoveGps={doRemove}
+            onDeleteAdded={doDeleteAdded}
             onClear={() => setSelection(null)}
           />
         )}

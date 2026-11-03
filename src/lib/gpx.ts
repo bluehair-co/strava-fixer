@@ -3,6 +3,9 @@
  * of track points. We edit the original text in place rather than parsing
  * and re-serialising the XML, so heart rate, cadence, power, elevation,
  * extensions, comments and even whitespace stay exactly as they were.
+ *
+ * Points added on the map become new, minimal track points with just a
+ * position and a time, inserted after the recorded point before them.
  */
 
 import type { TrackPoint } from "./track";
@@ -17,6 +20,10 @@ export interface ParsedGpx {
   points: TrackPoint[];
   lats: GpxAttr[];
   lons: GpxAttr[];
+  /** Where each track point element starts and ends in the text. */
+  spans: GpxAttr[];
+  /** Namespace prefix of the track point tags, e.g. "" or "gpx:". */
+  prefix: string;
 }
 
 const TRKPT = /<(?:[\w-]+:)?trkpt\b[^>]*>/g;
@@ -38,7 +45,9 @@ export function parseGpx(text: string): ParsedGpx {
   const points: TrackPoint[] = [];
   const lats: GpxAttr[] = [];
   const lons: GpxAttr[] = [];
+  const spans: GpxAttr[] = [];
   const tags = [...text.matchAll(TRKPT)];
+  const prefix = tags.length ? /^<([\w-]+:)?/.exec(tags[0][0])![1] ?? "" : "";
   tags.forEach((m, i) => {
     const tagStart = m.index!;
     const lat = findAttr(m[0], tagStart, "lat");
@@ -46,7 +55,8 @@ export function parseGpx(text: string): ParsedGpx {
     if (!lat || !lon) return;
     const bodyEnd = i + 1 < tags.length ? tags[i + 1].index! : text.length;
     const body = text.slice(tagStart + m[0].length, bodyEnd);
-    const closeAt = body.search(/<\/(?:[\w-]+:)?trkpt>/);
+    const close = /<\/(?:[\w-]+:)?trkpt\s*>/.exec(body);
+    const closeAt = close ? close.index : -1;
     const timeMatch = TIME.exec(closeAt >= 0 ? body.slice(0, closeAt) : body);
     const time = timeMatch ? Date.parse(timeMatch[1]) : NaN;
     points.push({
@@ -56,9 +66,11 @@ export function parseGpx(text: string): ParsedGpx {
     });
     lats.push(lat);
     lons.push(lon);
+    const tagEnd = tagStart + m[0].length;
+    spans.push({ start: tagStart, end: m[0].endsWith("/>") || !close ? tagEnd : tagEnd + close.index + close[0].length });
   });
   if (points.length === 0) throw new Error("The GPX file has no track points.");
-  return { points, lats, lons };
+  return { points, lats, lons, spans, prefix };
 }
 
 function formatCoord(value: number): string {
@@ -66,12 +78,32 @@ function formatCoord(value: number): string {
   return value.toFixed(7).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function formatTime(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.000Z$/, "Z");
+}
+
+/** The text of a track point for a point added on the map. */
+export function newTrackPoint(prefix: string, p: TrackPoint): string {
+  const time = p.time === null ? "" : `<${prefix}time>${formatTime(p.time)}</${prefix}time>`;
+  return `<${prefix}trkpt lat="${formatCoord(p.lat!)}" lon="${formatCoord(p.lon!)}">${time}</${prefix}trkpt>`;
+}
+
 export function writeGpx(original: string, parsed: ParsedGpx, points: TrackPoint[]): string {
-  if (points.length !== parsed.points.length) {
-    throw new Error("Point count changed; points can be moved but not added or removed.");
+  if (points.filter((p) => !p.added).length !== parsed.points.length) {
+    throw new Error("Point count changed; recorded points can be moved but not removed.");
   }
   const edits: { start: number; end: number; text: string }[] = [];
-  points.forEach((p, i) => {
+  let i = -1; // the recorded point we're at
+  points.forEach((p) => {
+    if (p.added) {
+      if (i < 0 || p.lat === null || p.lon === null) throw new Error("An added point needs a position and a point before it.");
+      // Same line break and indent as the point before it.
+      const span = parsed.spans[i];
+      const indent = /\s*$/.exec(original.slice(Math.max(0, span.start - 200), span.start))![0];
+      edits.push({ start: span.end, end: span.end, text: indent + newTrackPoint(parsed.prefix, p) });
+      return;
+    }
+    i++;
     const before = parsed.points[i];
     if (p.lat === before.lat && p.lon === before.lon) return; // untouched: keep original text
     if (p.lat === null || p.lon === null) {
@@ -80,6 +112,7 @@ export function writeGpx(original: string, parsed: ParsedGpx, points: TrackPoint
     edits.push({ ...parsed.lats[i], text: formatCoord(p.lat) });
     edits.push({ ...parsed.lons[i], text: formatCoord(p.lon) });
   });
+  // Stable sort keeps added points in order.
   edits.sort((x, y) => x.start - y.start);
   let out = "";
   let cursor = 0;
@@ -90,8 +123,14 @@ export function writeGpx(original: string, parsed: ParsedGpx, points: TrackPoint
   return out + original.slice(cursor);
 }
 
-/** Confirms that only lat/lon values differ. Returns problems (empty means OK). */
-export function verifyGpx(original: string, fixed: string, parsed: ParsedGpx): string[] {
+/**
+ * Confirms that only lat/lon values differ. Returns problems (empty means OK).
+ *
+ * If points were added (`points` is the edited track), each added point must
+ * be a minimal track point (position and time only) in the right place; they
+ * are taken out again before comparing the rest with the original.
+ */
+export function verifyGpx(original: string, fixed: string, parsed: ParsedGpx, points?: TrackPoint[]): string[] {
   const mask = (text: string, p: ParsedGpx) => {
     const ranges = [...p.lats, ...p.lons].sort((x, y) => x.start - y.start);
     let out = "";
@@ -107,6 +146,32 @@ export function verifyGpx(original: string, fixed: string, parsed: ParsedGpx): s
     reparsed = parseGpx(fixed);
   } catch {
     return ["The fixed file can't be read back."];
+  }
+  const added = points?.filter((p) => p.added).length ?? 0;
+  if (added > 0) {
+    if (reparsed.points.length !== points!.length) {
+      return ["The fixed file has a different number of points."];
+    }
+    // Cut the added points (and the line break before each) back out.
+    const NEW_POINT = /^<([\w-]+:)?trkpt lat="-?[\d.]+" lon="-?[\d.]+">(<\1time>[^<]+<\/\1time>)?<\/\1trkpt>$/;
+    let stripped = "";
+    let cursor = 0;
+    for (let j = 0; j < points!.length; j++) {
+      if (!points![j].added) continue;
+      const span = reparsed.spans[j];
+      if (!NEW_POINT.test(fixed.slice(span.start, span.end))) {
+        return ["An added point holds more than a position and a time."];
+      }
+      const lead = /\s*$/.exec(fixed.slice(cursor, span.start))![0].length;
+      stripped += fixed.slice(cursor, span.start - lead);
+      cursor = span.end;
+    }
+    fixed = stripped + fixed.slice(cursor);
+    try {
+      reparsed = parseGpx(fixed);
+    } catch {
+      return ["The fixed file can't be read back."];
+    }
   }
   if (reparsed.points.length !== parsed.points.length) {
     return ["The fixed file has a different number of points."];

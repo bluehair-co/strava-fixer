@@ -13,9 +13,9 @@
  * changed.
  */
 
-import { fitCrc, isFit, parseFit, RECORD_FIELDS, RECORD_MESG } from "./fit";
+import { parseFit, RECORD_FIELDS, RECORD_MESG } from "./fit";
 import { isGpx, parseGpx } from "./gpx";
-import { concat, readMessages, walkFit, type RawMessage } from "./merge";
+import { buildSegment, checksumProblems, isFit, readMessages, walkFit, type RawMessage } from "./fitbytes";
 import { metresBetween, type TrackPoint } from "./track";
 
 const FILE_ID_MESG = 0;
@@ -171,17 +171,7 @@ function joinFit(first: Part, second: Part): Uint8Array {
     },
   });
 
-  const head = header!;
-  const dataSize = chunks.reduce((n, c) => n + c.length, 0);
-  new DataView(head.buffer).setUint32(4, dataSize, true);
-  if (head.length >= 14 && (head[12] || head[13])) {
-    const crc = fitCrc(head, 0, 12);
-    head[12] = crc & 0xff;
-    head[13] = crc >> 8;
-  }
-  const body = concat([head, ...chunks]);
-  const crc = fitCrc(body, 0, body.length);
-  return concat([body, new Uint8Array([crc & 0xff, crc >> 8])]);
+  return buildSegment(header!, chunks);
 }
 
 /**
@@ -196,13 +186,7 @@ export function verifyJoinedFit(first: Uint8Array, second: Uint8Array, joined: U
   } catch {
     return ["The joined file can't be read back."];
   }
-  const problems: string[] = [];
-  walkFit(joined, {
-    segmentEnd(seg) {
-      const stored = joined[seg.dataEnd] | (joined[seg.dataEnd + 1] << 8);
-      if (stored !== fitCrc(joined, seg.start, seg.dataEnd)) problems.push("The joined file's checksum is wrong.");
-    },
-  });
+  const problems = checksumProblems(joined, "joined");
   const a = readMessages(first);
   const b = readMessages(second).filter((m) => m.globalNum !== FILE_ID_MESG);
   const want = [...a, ...b];

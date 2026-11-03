@@ -18,6 +18,10 @@ interface Props {
   /** Called after shift+dragging a box: the first and last point inside it. */
   onBoxSelect: (from: number, to: number) => void;
   onMove: (index: number, lat: number, lon: number) => void;
+  /** When true, clicking the map adds a point there. */
+  addMode?: boolean;
+  /** Add a point at lat/lon between points `after` and `after + 1`. */
+  onInsert?: (after: number, lat: number, lon: number) => void;
 }
 
 const COLORS = {
@@ -25,6 +29,7 @@ const COLORS = {
   track: "#fc4c02",
   point: "#fc4c02",
   selected: "#1a73e8",
+  added: "#0b8043",
 };
 
 /** How close (in screen pixels) a press must be to a point to count as on it. */
@@ -43,17 +48,51 @@ function toLatLngs(points: TrackPoint[]): L.LatLngExpression[][] {
   return parts.filter((part) => part.length > 0);
 }
 
-export default function MapView({ original, points, selection, onSelect, onBoxSelect, onMove }: Props) {
+/**
+ * The stretch of track (between points i and i + 1) closest on screen to
+ * `at`, or -1 if there is none. Stretches across a gap in the GPS don't count.
+ */
+function nearestStretch(map: L.Map, points: TrackPoint[], at: L.Point): number {
+  let best = -1;
+  let bestDist = Infinity;
+  let prev: L.Point | null = null;
+  points.forEach((p, i) => {
+    if (p.lat === null || p.lon === null) {
+      prev = null;
+      return;
+    }
+    const here = map.latLngToContainerPoint([p.lat, p.lon]);
+    if (prev) {
+      const d = L.LineUtil.pointToSegmentDistance(at, prev, here);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i - 1;
+      }
+    }
+    prev = here;
+  });
+  return best;
+}
+
+export default function MapView({ original, points, selection, onSelect, onBoxSelect, onMove, addMode = false, onInsert }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
-  const callbacks = useRef({ onSelect, onBoxSelect, onMove });
+  const callbacks = useRef({ onSelect, onBoxSelect, onMove, onInsert });
   const pointsRef = useRef(points);
+  const addModeRef = useRef(addMode);
 
   useEffect(() => {
-    callbacks.current = { onSelect, onBoxSelect, onMove };
+    callbacks.current = { onSelect, onBoxSelect, onMove, onInsert };
     pointsRef.current = points;
+    addModeRef.current = addMode;
   });
+
+  // A crosshair shows that clicking will add a point.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) map.getContainer().style.cursor = addMode ? "crosshair" : "";
+  }, [addMode]);
 
   // Create the map once.
   useEffect(() => {
@@ -120,6 +159,13 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
     // Capture phase, so we see the press before Leaflet starts panning.
     container.addEventListener("mousedown", onPress, true);
 
+    // In "add points" mode, a click adds a point to the nearest stretch of track.
+    map.on("click", (e: L.LeafletMouseEvent) => {
+      if (!addModeRef.current || e.originalEvent.shiftKey) return;
+      const after = nearestStretch(map, pointsRef.current, e.containerPoint);
+      if (after >= 0) callbacks.current.onInsert?.(after, e.latlng.lat, e.latlng.lng);
+    });
+
     return () => {
       container.removeEventListener("mousedown", onPress, true);
       map.remove();
@@ -144,15 +190,15 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
       if (p.lat === null || p.lon === null) return;
       const selected = i >= lo && i <= hi;
       const marker = L.circleMarker([p.lat, p.lon], {
-        radius: selected ? 6 : 4,
-        color: selected ? COLORS.selected : COLORS.point,
+        radius: selected ? 6 : p.added ? 5 : 4,
+        color: selected ? COLORS.selected : p.added ? COLORS.added : COLORS.point,
         fillColor: "#fff",
         fillOpacity: 1,
         weight: 2,
         bubblingMouseEvents: false,
       }).addTo(layers);
       marker.bindTooltip(
-        `Point ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}`,
+        `${p.added ? "Added point" : "Point"} ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}`,
         { direction: "top" },
       );
 

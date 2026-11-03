@@ -23,11 +23,21 @@ every other recorded value are kept exactly as they were.
      spaced by their recorded time.
    - **Remove GPS** (FIT files only) keeps the samples, with their heart rate
      and so on, but drops their position.
+   - **Add points**: turn it on, then click the map to add a new point to the
+     nearest stretch of track, e.g. to follow the road where the GPS cut a
+     corner. Drag it to fine-tune. A new point gets a time from how far along
+     the stretch it is: a third of the way between two recorded points means
+     a third of the time between them. Recorded times never change, and the
+     time is worked out again whenever you move it or add another point next
+     to it. It's saved as a new sample with only a time and a position (plus
+     distance and speed): no heart rate, cadence, power or elevation is made
+     up for it. Times are whole seconds, as that's all FIT files store.
+     **Delete added point** in the side panel removes it again.
    - **Undo** and **Reset** take changes back.
 3. **Download fixed file.** The new total distance is shown above the map.
    Before downloading, the app checks that nothing but GPS positions,
-   distance and speed differs from the original, and refuses if anything
-   else changed. Then delete the old activity on Strava and upload the fixed one:
+   distance and speed differs from the original (and that added points hold
+   only a time and a position), and refuses if anything else changed. Then delete the old activity on Strava and upload the fixed one:
    after downloading, the app reminds you of the order and has a button that
    opens Strava's upload page.
 
