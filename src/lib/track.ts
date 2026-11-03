@@ -4,6 +4,12 @@ export interface TrackPoint {
   lon: number | null;
   /** Milliseconds since 1970, or null if the file has no time for it. */
   time: number | null;
+  /**
+   * True for a point you added on the map. It isn't in the original file,
+   * so it gets a new sample with only a time and a position (its time comes
+   * from `retime`).
+   */
+  added?: boolean;
 }
 
 /**
@@ -37,23 +43,125 @@ export function straighten(points: TrackPoint[], from: number, to: number): Trac
   });
 }
 
-/** Removes the GPS position (but nothing else) from the selected points. */
+/**
+ * Removes the GPS position (but nothing else) from the selected points.
+ * Added points have nothing but a position, so they are deleted instead.
+ */
 export function clearPositions(points: TrackPoint[], from: number, to: number): TrackPoint[] {
   const [a, b] = from < to ? [from, to] : [to, from];
-  return points.map((p, i) => (i >= a && i <= b ? { ...p, lat: null, lon: null } : p));
+  const out: TrackPoint[] = [];
+  points.forEach((p, i) => {
+    if (i < a || i > b) out.push(p);
+    else if (!p.added) out.push({ ...p, lat: null, lon: null });
+  });
+  // An added point needs recorded points with a position on both sides.
+  const hasPos = (p: TrackPoint | undefined) => !!p && p.lat !== null && p.lon !== null;
+  const keep = out.map((p, i) => {
+    if (!p.added) return true;
+    let before = i - 1;
+    while (before >= 0 && out[before].added) before--;
+    let after = i + 1;
+    while (after < out.length && out[after].added) after++;
+    return hasPos(out[before]) && hasPos(out[after]);
+  });
+  return retime(out.filter((_, i) => keep[i]));
 }
 
-export function movePoint(points: TrackPoint[], index: number, lat: number, lon: number): TrackPoint[] {
-  return points.map((p, i) => (i === index ? { ...p, lat, lon } : p));
+/** Deletes the added points in the selection (original points are kept). */
+export function deleteAdded(points: TrackPoint[], from: number, to: number): TrackPoint[] {
+  const [a, b] = from < to ? [from, to] : [to, from];
+  return retime(points.filter((p, i) => !(p.added && i >= a && i <= b)));
 }
 
-/** Number of points whose position differs from the original. */
-export function countChanged(original: TrackPoint[], current: TrackPoint[]): number {
-  let n = 0;
-  for (let i = 0; i < original.length; i++) {
-    if (original[i].lat !== current[i].lat || original[i].lon !== current[i].lon) n++;
+/**
+ * Adds a new point between points `after` and `after + 1`, then works out
+ * the times of the added points around it (see `retime`).
+ */
+export function insertPoint(points: TrackPoint[], after: number, lat: number, lon: number): TrackPoint[] {
+  if (after < 0 || after >= points.length - 1) {
+    throw new Error("A new point has to go between two existing points.");
   }
-  return n;
+  const point: TrackPoint = { lat, lon, time: null, added: true };
+  return retime([...points.slice(0, after + 1), point, ...points.slice(after + 1)]);
+}
+
+/**
+ * Gives every added point a time, without touching any recorded time.
+ *
+ * Added points always sit between two recorded points A and B. Their time is
+ * A's time plus the share of the A-to-B time that matches how far along the
+ * way from A to B they are (measured along the track, through any other added
+ * points). A point a third of the way gets a time a third of the way.
+ *
+ * Times are rounded to whole seconds, because that's all a FIT file can
+ * store. If A or B has no time or no position, the added points get no time.
+ */
+export function retime(points: TrackPoint[]): TrackPoint[] {
+  if (!points.some((p) => p.added)) return points;
+  const out = points.slice();
+  let i = 0;
+  while (i < out.length) {
+    if (!out[i].added) {
+      i++;
+      continue;
+    }
+    // A run of added points from i to j - 1, between recorded points i - 1 and j.
+    let j = i;
+    while (j < out.length && out[j].added) j++;
+    const a = out[i - 1];
+    const b = out[j];
+    const usable = (p: TrackPoint | undefined): p is TrackPoint & { lat: number; lon: number; time: number } =>
+      !!p && p.lat !== null && p.lon !== null && p.time !== null;
+    if (!usable(a) || !usable(b)) {
+      for (let k = i; k < j; k++) out[k] = { ...out[k], time: null };
+    } else {
+      // Distance along the way from A to each added point, and to B.
+      const along: number[] = [];
+      let total = 0;
+      let prev: TrackPoint = a;
+      for (let k = i; k <= j; k++) {
+        const p = out[k];
+        if (p.lat !== null && p.lon !== null) {
+          total += metresBetween(prev.lat!, prev.lon!, p.lat, p.lon);
+          prev = p;
+        }
+        along.push(total);
+      }
+      const n = j - i + 1;
+      for (let k = i; k < j; k++) {
+        const share = total > 0 ? along[k - i] / total : (k - i + 1) / n;
+        const time = Math.round((a.time + (b.time - a.time) * share) / 1000) * 1000;
+        if (out[k].time !== time) out[k] = { ...out[k], time };
+      }
+    }
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * For each point, the matching point of the original file, or null for
+ * points you added.
+ */
+export function originalsOf(original: TrackPoint[], current: TrackPoint[]): (TrackPoint | null)[] {
+  let k = 0;
+  return current.map((p) => (p.added ? null : original[k++]));
+}
+
+/** Moves one point. Added points nearby get new times to match. */
+export function movePoint(points: TrackPoint[], index: number, lat: number, lon: number): TrackPoint[] {
+  return retime(points.map((p, i) => (i === index ? { ...p, lat, lon } : p)));
+}
+
+/** Number of points whose position differs from the original, and number of added points. */
+export function countChanged(original: TrackPoint[], current: TrackPoint[]): { moved: number; added: number } {
+  let moved = 0;
+  let added = 0;
+  originalsOf(original, current).forEach((o, i) => {
+    if (!o) added++;
+    else if (o.lat !== current[i].lat || o.lon !== current[i].lon) moved++;
+  });
+  return { moved, added };
 }
 
 const EARTH_RADIUS_M = 6371008.8;

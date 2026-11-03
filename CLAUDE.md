@@ -16,6 +16,12 @@ These are David's standing preferences. Follow them in every session.
   is wanted: fixing wrong distances is part of the point of the app. The
   download safety check (`verifyFit` / `verifyGpx`) enforces this; never
   weaken it beyond those fields.
+- Points added on the map (David's request) become new samples holding only
+  a timestamp, a position, and distance/speed. Their time is interpolated by
+  distance along the way between the two recorded points around them;
+  recorded timestamps never change. No heart rate, cadence, power,
+  elevation etc. is ever made up for them. The safety check allows exactly
+  these new samples and nothing more.
 
 ## Decisions so far
 - Files only for now: no Strava API (creating an API app needs a paid Strava

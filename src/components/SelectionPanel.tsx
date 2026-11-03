@@ -1,6 +1,6 @@
 "use client";
 
-import type { TrackPoint } from "@/lib/track";
+import { originalsOf, type TrackPoint } from "@/lib/track";
 import styles from "./Editor.module.css";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   onExtend: (side: "before" | "after") => void;
   onStraighten: () => void;
   onRemoveGps: () => void;
+  onDeleteAdded: () => void;
   onClear: () => void;
 }
 
@@ -29,18 +30,25 @@ export default function SelectionPanel({
   onExtend,
   onStraighten,
   onRemoveGps,
+  onDeleteAdded,
   onClear,
 }: Props) {
   const count = to - from + 1;
+  const originals = originalsOf(original, points);
+  let addedCount = 0;
   const rows = [];
   for (let i = from; i <= to; i++) {
     const p = points[i];
-    const moved = p.lat !== original[i].lat || p.lon !== original[i].lon;
+    const o = originals[i];
+    if (!o) addedCount++;
+    const moved = o !== null && (p.lat !== o.lat || p.lon !== o.lon);
     rows.push(
       <li key={i}>
         <span className={styles.pointNumber}>{i + 1}</span>
         <span>{formatTime(p.time)}</span>
-        {p.lat === null ? (
+        {!o ? (
+          <span className={styles.tag}>added</span>
+        ) : p.lat === null ? (
           <span className={styles.tag}>no GPS</span>
         ) : moved ? (
           <span className={styles.tag}>moved</span>
@@ -53,7 +61,7 @@ export default function SelectionPanel({
     <aside className={styles.panel} aria-label="Selected points">
       <div className={styles.panelHeader}>
         <strong>
-          {count === 1 ? `Point ${from + 1}` : `Points ${from + 1}–${to + 1}`}
+          {count === 1 ? `${originals[from] ? "Point" : "Added point"} ${from + 1}` : `Points ${from + 1}–${to + 1}`}
         </strong>
         <span>
           {count} {count === 1 ? "point" : "points"} selected
@@ -74,8 +82,13 @@ export default function SelectionPanel({
           Straighten
         </button>
         {canRemoveGps && (
-          <button onClick={onRemoveGps} title="Keep the samples (heart rate etc.) but drop their GPS position">
+          <button onClick={onRemoveGps} title="Keep the samples (heart rate etc.) but drop their GPS position. Added points are deleted.">
             Remove GPS
+          </button>
+        )}
+        {addedCount > 0 && (
+          <button onClick={onDeleteAdded} title="Delete the points you added (recorded points stay)">
+            Delete added {addedCount === 1 ? "point" : "points"}
           </button>
         )}
         <button onClick={onClear}>Clear selection</button>

@@ -19,7 +19,8 @@
  * distance or speed differs.
  */
 
-import { fitCrc, isFit, LAP_MESG, parseFit, RECORD_FIELDS, RECORD_MESG, SESSION_MESG, SUMMARY_FIELDS, writeFit } from "./fit";
+import { LAP_MESG, parseFit, RECORD_FIELDS, RECORD_MESG, SESSION_MESG, SUMMARY_FIELDS, writeFit } from "./fit";
+import { buildSegment, checksumProblems, concat, isFit, readMessages, walkFit, type MesgDef, type RawMessage } from "./fitbytes";
 import { isGpx, parseGpx, verifyGpx, writeGpx } from "./gpx";
 import type { TrackPoint } from "./track";
 
@@ -27,132 +28,6 @@ const FIELD_LAT = 0;
 const FIELD_LON = 1;
 const SINT32 = 0x85; // FIT base type for a signed 32-bit number
 const INVALID_SINT32 = 0x7fffffff;
-
-/* ---------- Reading FIT messages generically ---------- */
-
-interface FieldDef {
-  num: number;
-  size: number;
-  /** Byte offset of this field's definition (num, size, type) in the file. */
-  defOffset: number;
-}
-
-interface MesgDef {
-  globalNum: number;
-  littleEndian: boolean;
-  /** Byte offset of the definition's "number of fields" byte. */
-  countOffset: number;
-  fields: FieldDef[];
-  fieldsSize: number;
-  devFieldsSize: number;
-}
-
-interface FitSegmentInfo {
-  start: number;
-  headerSize: number;
-  dataEnd: number;
-}
-
-interface Visitor {
-  segment?(seg: FitSegmentInfo): void;
-  /** A definition message, from `start` up to (not including) `end`. */
-  definition?(def: MesgDef, localType: number, start: number, end: number): void;
-  /** A data message: header byte at `start`, fields from `start + 1`. */
-  data?(def: MesgDef, start: number, end: number): void;
-  segmentEnd?(seg: FitSegmentInfo): void;
-}
-
-/** Walks every message of a FIT file (all segments), calling the visitor. */
-export function walkFit(bytes: Uint8Array, visit: Visitor) {
-  if (!isFit(bytes)) throw new Error("This doesn't look like a FIT file.");
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let segStart = 0;
-  while (segStart + 12 <= bytes.length && isFit(bytes.subarray(segStart))) {
-    const headerSize = bytes[segStart];
-    const dataEnd = segStart + headerSize + view.getUint32(segStart + 4, true);
-    if (dataEnd + 2 > bytes.length) {
-      throw new Error("The FIT file is shorter than its header says. Is it complete?");
-    }
-    const seg = { start: segStart, headerSize, dataEnd };
-    visit.segment?.(seg);
-    const defs = new Map<number, MesgDef>();
-    let pos = segStart + headerSize;
-    while (pos < dataEnd) {
-      const start = pos;
-      const header = bytes[pos++];
-      if (!(header & 0x80) && header & 0x40) {
-        const localType = header & 0x0f;
-        const littleEndian = bytes[pos + 1] === 0;
-        const globalNum = view.getUint16(pos + 2, littleEndian);
-        const countOffset = pos + 4;
-        const numFields = bytes[countOffset];
-        pos += 5;
-        const fields: FieldDef[] = [];
-        let fieldsSize = 0;
-        for (let i = 0; i < numFields; i++) {
-          fields.push({ num: bytes[pos], size: bytes[pos + 1], defOffset: pos });
-          fieldsSize += bytes[pos + 1];
-          pos += 3;
-        }
-        let devFieldsSize = 0;
-        if (header & 0x20) {
-          const numDev = bytes[pos++];
-          for (let i = 0; i < numDev; i++) {
-            devFieldsSize += bytes[pos + 1];
-            pos += 3;
-          }
-        }
-        const def = { globalNum, littleEndian, countOffset, fields, fieldsSize, devFieldsSize };
-        defs.set(localType, def);
-        visit.definition?.(def, localType, start, pos);
-        continue;
-      }
-      const localType = header & 0x80 ? (header >> 5) & 0x03 : header & 0x0f;
-      const def = defs.get(localType);
-      if (!def) {
-        throw new Error(`The FIT file uses a message type before defining it (at byte ${start}).`);
-      }
-      pos += def.fieldsSize + def.devFieldsSize;
-      visit.data?.(def, start, pos);
-    }
-    visit.segmentEnd?.(seg);
-    segStart = dataEnd + 2;
-  }
-}
-
-/** One data message as raw bytes per field, for comparing two files. */
-export interface RawMessage {
-  globalNum: number;
-  header: number;
-  fields: Map<number, string>;
-  dev: string;
-}
-
-const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-
-export function readMessages(bytes: Uint8Array): RawMessage[] {
-  const out: RawMessage[] = [];
-  walkFit(bytes, {
-    data(def, start) {
-      const fields = new Map<number, string>();
-      let pos = start + 1;
-      for (const f of def.fields) {
-        // Bytes are compared in big-endian order so a field means the same
-        // thing whichever byte order the file uses.
-        const raw = bytes.slice(pos, pos + f.size);
-        fields.set(f.num, hex(def.littleEndian ? raw.reverse() : raw));
-        pos += f.size;
-      }
-      out.push({
-        globalNum: def.globalNum,
-        header: bytes[start] & 0x80 ? bytes[start] & 0x9f : 0, // keep compressed time offsets
-        fields,
-        dev: hex(bytes.subarray(pos, pos + def.devFieldsSize)),
-      });
-    },
-  });
-  return out;
-}
 
 /* ---------- Adding position fields ---------- */
 
@@ -203,31 +78,10 @@ export function addPositionFields(bytes: Uint8Array): Uint8Array {
       segChunks.push(bytes.subarray(start, fieldsEnd), add, bytes.subarray(fieldsEnd, end));
     },
     segmentEnd() {
-      const header = segHeader!;
-      const dataSize = segChunks.reduce((n, c) => n + c.length, 0);
-      new DataView(header.buffer).setUint32(4, dataSize, true);
-      // A 14-byte header has its own checksum (0 means "not used").
-      if (header.length >= 14 && (header[12] || header[13])) {
-        const crc = fitCrc(header, 0, 12);
-        header[12] = crc & 0xff;
-        header[13] = crc >> 8;
-      }
-      const seg = concat([header, ...segChunks]);
-      const crc = fitCrc(seg, 0, seg.length);
-      chunks.push(seg, new Uint8Array([crc & 0xff, crc >> 8]));
+      chunks.push(buildSegment(segHeader!, segChunks));
     },
   });
   return added ? concat(chunks) : bytes;
-}
-
-export function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
 }
 
 /**
@@ -245,14 +99,7 @@ export function verifyMergedFit(base: Uint8Array, merged: Uint8Array): string[] 
   } catch {
     return ["The merged file can't be read back."];
   }
-  const problems: string[] = [];
-  // Checksums.
-  walkFit(merged, {
-    segmentEnd(seg) {
-      const stored = merged[seg.dataEnd] | (merged[seg.dataEnd + 1] << 8);
-      if (stored !== fitCrc(merged, seg.start, seg.dataEnd)) problems.push("The merged file's checksum is wrong.");
-    },
-  });
+  const problems = checksumProblems(merged, "merged");
   if (a.length !== b.length) return [...problems, "The merged file has a different number of messages."];
 
   const changeable = new Map<number, Set<number>>([

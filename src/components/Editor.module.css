@@ -50,6 +50,12 @@
   cursor: default;
 }
 
+.toolbar .active {
+  background: #0b8043;
+  border-color: #0b8043;
+  color: #fff;
+}
+
 .toolbar .primary {
   background: #fc4c02;
   border-color: #fc4c02;
