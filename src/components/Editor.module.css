@@ -211,3 +211,64 @@
   color: #666;
   cursor: pointer;
 }
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.tabs button {
+  padding: 0.45rem 0.9rem;
+  border: none;
+  border-bottom: 3px solid transparent;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.tabs button[aria-selected="true"] {
+  border-bottom-color: #fc4c02;
+  font-weight: 600;
+}
+
+.merge {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pickers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.dropSmall {
+  padding: 1.25rem 1rem;
+  text-align: center;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.9rem;
+}
+
+.options legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+
+.mergeMap {
+  height: 60vh;
+  min-height: 300px;
+  border-radius: 8px;
+  overflow: hidden;
+}

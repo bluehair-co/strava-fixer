@@ -21,9 +21,9 @@
 import { buildDistanceModel } from "./distance";
 import { stepDistances, type TrackPoint } from "./track";
 
-const SESSION_MESG = 18;
-const LAP_MESG = 19;
-const RECORD_MESG = 20; // "record" messages hold one sample (position, HR, ...)
+export const SESSION_MESG = 18;
+export const LAP_MESG = 19;
+export const RECORD_MESG = 20; // "record" messages hold one sample (position, HR, ...)
 const FIELD_LAT = 0; // position_lat, sint32 semicircles
 const FIELD_LON = 1; // position_long, sint32 semicircles
 const FIELD_TIMESTAMP = 253; // uint32 seconds since FIT epoch
@@ -33,12 +33,12 @@ const INVALID_UINT16 = 0xffff;
 
 // Field numbers (from the FIT profile) of values we recalculate.
 // Distances are stored in centimetres, speeds in mm/s.
-const RECORD_FIELDS = { distance: 5, speed: 6, enhancedSpeed: 73 } as const;
-const SUMMARY_FIELDS = {
+export const RECORD_FIELDS = { distance: 5, speed: 6, enhancedSpeed: 73 } as const;
+export const SUMMARY_FIELDS = {
   [LAP_MESG]: { startTime: 2, timerTime: 8, totalDistance: 9, avgSpeed: 13, maxSpeed: 14, enhancedAvgSpeed: 110, enhancedMaxSpeed: 111 },
   [SESSION_MESG]: { startTime: 2, timerTime: 8, totalDistance: 9, avgSpeed: 14, maxSpeed: 15, enhancedAvgSpeed: 124, enhancedMaxSpeed: 125 },
 } as const;
-const FIT_EPOCH_MS = Date.UTC(1989, 11, 31, 0, 0, 0);
+export const FIT_EPOCH_MS = Date.UTC(1989, 11, 31, 0, 0, 0);
 const SEMICIRCLES_PER_DEGREE = 2 ** 31 / 180;
 
 /** Where a record's position lives inside the file. */
