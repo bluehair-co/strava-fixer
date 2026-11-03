@@ -1,23 +1,42 @@
 /**
- * Minimal FIT file reader/writer that only ever touches GPS positions.
+ * Minimal FIT file reader/writer that only touches GPS positions and the
+ * values derived from them (distance and speed).
  *
  * Instead of decoding the file into objects and re-encoding it (which can
  * silently drop fields the encoder doesn't know about), we walk the raw bytes,
- * remember exactly where each record's latitude and longitude are stored, and
- * later overwrite just those bytes. Every other byte of the file stays
- * identical, apart from the 2-byte checksum at the end of each FIT segment,
- * which has to be recalculated because the data changed.
+ * remember exactly where the fields we may change are stored, and later
+ * overwrite just those bytes. Every other byte of the file stays identical,
+ * apart from the 2-byte checksum at the end of each FIT segment, which has to
+ * be recalculated because the data changed.
+ *
+ * What may change:
+ *  - record: position_lat, position_long, and for fixed points distance,
+ *    speed and enhanced_speed
+ *  - lap / session: total_distance, avg/max speed (and their "enhanced"
+ *    versions), recalculated from the fixed records
  *
  * FIT format reference: https://developer.garmin.com/fit/protocol/
  */
 
-import type { TrackPoint } from "./track";
+import { stepDistances, type TrackPoint } from "./track";
 
+const SESSION_MESG = 18;
+const LAP_MESG = 19;
 const RECORD_MESG = 20; // "record" messages hold one sample (position, HR, ...)
 const FIELD_LAT = 0; // position_lat, sint32 semicircles
 const FIELD_LON = 1; // position_long, sint32 semicircles
 const FIELD_TIMESTAMP = 253; // uint32 seconds since FIT epoch
 const INVALID_SINT32 = 0x7fffffff; // FIT's "no value" marker for sint32
+const INVALID_UINT32 = 0xffffffff;
+const INVALID_UINT16 = 0xffff;
+
+// Field numbers (from the FIT profile) of values we recalculate.
+// Distances are stored in centimetres, speeds in mm/s.
+const RECORD_FIELDS = { distance: 5, speed: 6, enhancedSpeed: 73 } as const;
+const SUMMARY_FIELDS = {
+  [LAP_MESG]: { startTime: 2, timerTime: 8, totalDistance: 9, avgSpeed: 13, maxSpeed: 14, enhancedAvgSpeed: 110, enhancedMaxSpeed: 111 },
+  [SESSION_MESG]: { startTime: 2, timerTime: 8, totalDistance: 9, avgSpeed: 14, maxSpeed: 15, enhancedAvgSpeed: 124, enhancedMaxSpeed: 125 },
+} as const;
 const FIT_EPOCH_MS = Date.UTC(1989, 11, 31, 0, 0, 0);
 const SEMICIRCLES_PER_DEGREE = 2 ** 31 / 180;
 
@@ -35,9 +54,43 @@ export interface FitSegment {
   dataSize: number;
 }
 
+/** A number stored at a known place in the file. */
+interface Slot {
+  offset: number;
+  size: 2 | 4;
+  littleEndian: boolean;
+}
+
+/** Every record message, including ones without a position. */
+export interface FitRecord {
+  /** FIT timestamp (seconds since 1989-12-31), or null. */
+  time: number | null;
+  /** Index into `points`, or -1 if this record has no position fields. */
+  point: number;
+  distance?: Slot;
+  speed?: Slot;
+  enhancedSpeed?: Slot;
+}
+
+/** A lap or session summary. */
+export interface FitSummary {
+  kind: "lap" | "session";
+  startTime: number | null;
+  endTime: number | null;
+  /** Timer time in seconds (excludes pauses), or null. */
+  timerTime: number | null;
+  totalDistance?: Slot;
+  avgSpeed?: Slot;
+  maxSpeed?: Slot;
+  enhancedAvgSpeed?: Slot;
+  enhancedMaxSpeed?: Slot;
+}
+
 export interface ParsedFit {
   points: TrackPoint[];
   slots: FitPositionSlot[];
+  records: FitRecord[];
+  summaries: FitSummary[];
   segments: FitSegment[];
 }
 
@@ -96,6 +149,8 @@ export function parseFit(bytes: Uint8Array): ParsedFit {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const points: TrackPoint[] = [];
   const slots: FitPositionSlot[] = [];
+  const records: FitRecord[] = [];
+  const summaries: FitSummary[] = [];
   const segments: FitSegment[] = [];
 
   let segStart = 0;
@@ -154,15 +209,15 @@ export function parseFit(bytes: Uint8Array): ParsedFit {
         throw new Error(`The FIT file uses a message type before defining it (at byte ${pos - 1}).`);
       }
 
-      let latOffset = -1;
-      let lonOffset = -1;
+      // Note where each field of this message starts.
+      const at = new Map<number, Slot>();
       let timestamp: number | null = null;
       for (const field of def.fields) {
         if (field.num === FIELD_TIMESTAMP && field.size === 4) {
           timestamp = view.getUint32(pos, def.littleEndian);
-        } else if (def.globalNum === RECORD_MESG && field.size === 4) {
-          if (field.num === FIELD_LAT) latOffset = pos;
-          if (field.num === FIELD_LON) lonOffset = pos;
+        }
+        if (field.size === 2 || field.size === 4) {
+          at.set(field.num, { offset: pos, size: field.size, littleEndian: def.littleEndian });
         }
         pos += field.size;
       }
@@ -179,28 +234,86 @@ export function parseFit(bytes: Uint8Array): ParsedFit {
         lastTimestamp = timestamp;
       }
 
-      if (latOffset >= 0 && lonOffset >= 0) {
-        const lat = view.getInt32(latOffset, def.littleEndian);
-        const lon = view.getInt32(lonOffset, def.littleEndian);
-        const valid = lat !== INVALID_SINT32 && lon !== INVALID_SINT32;
-        points.push({
-          lat: valid ? semicirclesToDegrees(lat) : null,
-          lon: valid ? semicirclesToDegrees(lon) : null,
-          time: timestamp !== null ? FIT_EPOCH_MS + timestamp * 1000 : null,
+      const sized = (num: number, size: 2 | 4) => {
+        const slot = at.get(num);
+        return slot && slot.size === size ? slot : undefined;
+      };
+
+      if (def.globalNum === RECORD_MESG) {
+        const latSlot = sized(FIELD_LAT, 4);
+        const lonSlot = sized(FIELD_LON, 4);
+        let point = -1;
+        if (latSlot && lonSlot) {
+          const lat = view.getInt32(latSlot.offset, def.littleEndian);
+          const lon = view.getInt32(lonSlot.offset, def.littleEndian);
+          const valid = lat !== INVALID_SINT32 && lon !== INVALID_SINT32;
+          point = points.length;
+          points.push({
+            lat: valid ? semicirclesToDegrees(lat) : null,
+            lon: valid ? semicirclesToDegrees(lon) : null,
+            time: timestamp !== null ? FIT_EPOCH_MS + timestamp * 1000 : null,
+          });
+          slots.push({ latOffset: latSlot.offset, lonOffset: lonSlot.offset, littleEndian: def.littleEndian });
+        }
+        records.push({
+          time: timestamp,
+          point,
+          distance: sized(RECORD_FIELDS.distance, 4),
+          speed: sized(RECORD_FIELDS.speed, 2),
+          enhancedSpeed: sized(RECORD_FIELDS.enhancedSpeed, 4),
         });
-        slots.push({ latOffset, lonOffset, littleEndian: def.littleEndian });
+      } else if (def.globalNum === LAP_MESG || def.globalNum === SESSION_MESG) {
+        const f = SUMMARY_FIELDS[def.globalNum];
+        const start = sized(f.startTime, 4);
+        const timer = sized(f.timerTime, 4);
+        const startTime = start ? view.getUint32(start.offset, def.littleEndian) : INVALID_UINT32;
+        const timerTime = timer ? view.getUint32(timer.offset, def.littleEndian) : INVALID_UINT32;
+        summaries.push({
+          kind: def.globalNum === LAP_MESG ? "lap" : "session",
+          startTime: startTime === INVALID_UINT32 ? null : startTime,
+          endTime: timestamp,
+          timerTime: timerTime === INVALID_UINT32 ? null : timerTime / 1000,
+          totalDistance: sized(f.totalDistance, 4),
+          avgSpeed: sized(f.avgSpeed, 2),
+          maxSpeed: sized(f.maxSpeed, 2),
+          enhancedAvgSpeed: sized(f.enhancedAvgSpeed, 4),
+          enhancedMaxSpeed: sized(f.enhancedMaxSpeed, 4),
+        });
       }
     }
     segStart = dataEnd + 2;
   }
 
   if (segments.length === 0) throw new Error("This doesn't look like a FIT file.");
-  return { points, slots, segments };
+  return { points, slots, records, summaries, segments };
+}
+
+function readSlot(view: DataView, slot: Slot): number | null {
+  if (slot.size === 2) {
+    const v = view.getUint16(slot.offset, slot.littleEndian);
+    return v === INVALID_UINT16 ? null : v;
+  }
+  const v = view.getUint32(slot.offset, slot.littleEndian);
+  return v === INVALID_UINT32 ? null : v;
+}
+
+function writeSlot(view: DataView, slot: Slot, value: number) {
+  const max = slot.size === 2 ? INVALID_UINT16 - 1 : INVALID_UINT32 - 1;
+  const v = Math.min(max, Math.max(0, Math.round(value)));
+  if (slot.size === 2) view.setUint16(slot.offset, v, slot.littleEndian);
+  else view.setUint32(slot.offset, v, slot.littleEndian);
 }
 
 /**
- * Returns a copy of the original file with only the positions replaced.
+ * Returns a copy of the original file with the positions replaced and the
+ * distance and speed values that depend on them recalculated.
  * A point with lat/lon of null is written as "no position" (FIT's invalid value).
+ *
+ * Distance is adjusted rather than recomputed from scratch: for every step
+ * between two points we add the difference between the fixed and the original
+ * straight-line distance. Steps you didn't touch keep the watch's own
+ * distance, which may come from a wheel sensor or foot pod and is often
+ * smoother than raw GPS.
  */
 export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackPoint[]): Uint8Array {
   if (points.length !== parsed.slots.length) {
@@ -208,6 +321,8 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
   }
   const out = new Uint8Array(original);
   const view = new DataView(out.buffer);
+
+  // 1. Positions.
   points.forEach((p, i) => {
     const slot = parsed.slots[i];
     const lat = p.lat === null || p.lon === null ? INVALID_SINT32 : degreesToSemicircles(p.lat);
@@ -215,6 +330,93 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
     view.setInt32(slot.latOffset, lat, slot.littleEndian);
     view.setInt32(slot.lonOffset, lon, slot.littleEndian);
   });
+
+  // 2. Record distance and speed.
+  const before = stepDistances(parsed.points);
+  const after = stepDistances(points);
+  const changed = points.map(
+    (p, i) => p.lat !== parsed.points[i].lat || p.lon !== parsed.points[i].lon,
+  );
+  // A step needs new speed if either of its ends moved (or lost its position).
+  const touched = new Array<boolean>(points.length).fill(false);
+  let lastValid = -1;
+  let gapChanged = false; // did anything change since the last point with a position?
+  points.forEach((p, i) => {
+    if (changed[i]) gapChanged = true;
+    if (p.lat !== null && p.lon !== null) {
+      if (gapChanged || (lastValid >= 0 && changed[lastValid])) {
+        for (let j = lastValid + 1; j <= i; j++) touched[j] = true;
+      }
+      lastValid = i;
+      gapChanged = false;
+    } else if (changed[i]) {
+      touched[i] = true;
+    }
+  });
+
+  let shiftMetres = 0; // how much the cumulative distance has changed so far
+  const shiftAtRecord: { time: number | null; shift: number }[] = [];
+  const newSpeeds: { time: number | null; speed: number | null }[] = [];
+  for (const rec of parsed.records) {
+    if (rec.point >= 0) shiftMetres += after[rec.point] - before[rec.point];
+    if (rec.distance && shiftMetres !== 0) {
+      const cm = readSlot(view, rec.distance);
+      if (cm !== null) writeSlot(view, rec.distance, cm + shiftMetres * 100);
+    }
+    let speed: number | null = null; // m/s
+    if (rec.point >= 0 && touched[rec.point]) {
+      speed = speedAround(points, after, rec.point);
+      if (speed !== null) {
+        if (rec.speed) writeSlot(view, rec.speed, speed * 1000);
+        if (rec.enhancedSpeed) writeSlot(view, rec.enhancedSpeed, speed * 1000);
+      }
+    }
+    if (speed === null) {
+      const raw = rec.enhancedSpeed ? readSlot(view, rec.enhancedSpeed) : rec.speed ? readSlot(view, rec.speed) : null;
+      speed = raw === null ? null : raw / 1000;
+    }
+    shiftAtRecord.push({ time: rec.time, shift: shiftMetres });
+    newSpeeds.push({ time: rec.time, speed });
+  }
+
+  // 3. Lap and session totals.
+  const shiftAt = (t: number) => {
+    let s = 0;
+    for (const r of shiftAtRecord) if (r.time !== null && r.time <= t) s = r.shift;
+    return s;
+  };
+  if (shiftMetres !== 0 || touched.some(Boolean)) {
+    for (const sum of parsed.summaries) {
+      if (sum.startTime === null || sum.endTime === null) continue;
+      const startShift = shiftAt(sum.startTime - 1);
+      const endShift = shiftAt(sum.endTime);
+      let totalM: number | null = null;
+      if (sum.totalDistance) {
+        const cm = readSlot(view, sum.totalDistance);
+        if (cm !== null) {
+          totalM = cm / 100 + (endShift - startShift);
+          writeSlot(view, sum.totalDistance, totalM * 100);
+        }
+      }
+      if (totalM !== null && sum.timerTime) {
+        const avg = totalM / sum.timerTime;
+        if (sum.avgSpeed && readSlot(view, sum.avgSpeed) !== null) writeSlot(view, sum.avgSpeed, avg * 1000);
+        if (sum.enhancedAvgSpeed && readSlot(view, sum.enhancedAvgSpeed) !== null)
+          writeSlot(view, sum.enhancedAvgSpeed, avg * 1000);
+      }
+      const inLap = newSpeeds.filter(
+        (r) => r.time !== null && r.speed !== null && r.time >= sum.startTime! && r.time <= sum.endTime!,
+      );
+      if (inLap.length) {
+        const max = Math.max(...inLap.map((r) => r.speed!));
+        if (sum.maxSpeed && readSlot(view, sum.maxSpeed) !== null) writeSlot(view, sum.maxSpeed, max * 1000);
+        if (sum.enhancedMaxSpeed && readSlot(view, sum.enhancedMaxSpeed) !== null)
+          writeSlot(view, sum.enhancedMaxSpeed, max * 1000);
+      }
+    }
+  }
+
+  // 4. Checksums.
   for (const seg of parsed.segments) {
     const dataEnd = seg.start + seg.headerSize + seg.dataSize;
     view.setUint16(dataEnd, fitCrc(out, seg.start, dataEnd), true);
@@ -223,9 +425,29 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
 }
 
 /**
+ * Speed (m/s) at a point, from the fixed track: the distance from the
+ * previous point with a position, divided by the time between them. Points
+ * without a position get the speed of the step that spans their gap.
+ */
+function speedAround(points: TrackPoint[], steps: number[], i: number): number | null {
+  // Find the step that covers point i: it ends at the next point with a position.
+  let end = i;
+  while (end < points.length && (points[end].lat === null || points[end].lon === null)) end++;
+  if (end >= points.length) return null;
+  let start = end - 1;
+  while (start >= 0 && (points[start].lat === null || points[start].lon === null)) start--;
+  if (start < 0) return null;
+  const t0 = points[start].time;
+  const t1 = points[end].time;
+  if (t0 === null || t1 === null || t1 <= t0) return null;
+  return steps[end] / ((t1 - t0) / 1000);
+}
+
+/**
  * Safety check: confirms that the only bytes that differ between the original
- * and the fixed file are position fields and checksums, and that the fixed
- * file's checksums are valid. Returns a list of problems (empty means OK).
+ * and the fixed file are positions, GPS-derived distance/speed values and
+ * checksums, and that the fixed file's checksums are valid.
+ * Returns a list of problems (empty means OK).
  */
 export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: ParsedFit): string[] {
   const problems: string[] = [];
@@ -233,9 +455,24 @@ export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: Parse
     return ["The fixed file has a different size from the original."];
   }
   const allowed = new Uint8Array(original.length);
+  const allow = (slot: Slot | undefined) => {
+    if (slot) allowed.fill(1, slot.offset, slot.offset + slot.size);
+  };
   for (const slot of parsed.slots) {
     allowed.fill(1, slot.latOffset, slot.latOffset + 4);
     allowed.fill(1, slot.lonOffset, slot.lonOffset + 4);
+  }
+  for (const rec of parsed.records) {
+    allow(rec.distance);
+    allow(rec.speed);
+    allow(rec.enhancedSpeed);
+  }
+  for (const sum of parsed.summaries) {
+    allow(sum.totalDistance);
+    allow(sum.avgSpeed);
+    allow(sum.maxSpeed);
+    allow(sum.enhancedAvgSpeed);
+    allow(sum.enhancedMaxSpeed);
   }
   for (const seg of parsed.segments) {
     const dataEnd = seg.start + seg.headerSize + seg.dataSize;
@@ -247,9 +484,29 @@ export function verifyFit(original: Uint8Array, fixed: Uint8Array, parsed: Parse
   }
   for (let i = 0; i < original.length; i++) {
     if (original[i] !== fixed[i] && !allowed[i]) {
-      problems.push(`Byte ${i} changed, but it isn't part of a GPS position.`);
+      problems.push(`Byte ${i} changed, but it isn't a GPS position, distance or speed.`);
       if (problems.length > 5) break;
     }
   }
   return problems;
+}
+
+/** Total distance in metres as the file reports it (session, else last record). */
+export function reportedDistance(bytes: Uint8Array, parsed: ParsedFit): number | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Sessions cover the whole activity (several for multisport); fall back to laps.
+  for (const kind of ["session", "lap"] as const) {
+    let total: number | null = null;
+    for (const sum of parsed.summaries) {
+      const cm = sum.kind === kind && sum.totalDistance ? readSlot(view, sum.totalDistance) : null;
+      if (cm !== null) total = (total ?? 0) + cm / 100;
+    }
+    if (total !== null) return total;
+  }
+  for (let i = parsed.records.length - 1; i >= 0; i--) {
+    const slot = parsed.records[i].distance;
+    const cm = slot ? readSlot(view, slot) : null;
+    if (cm !== null) return cm / 100;
+  }
+  return null;
 }

@@ -1,9 +1,10 @@
 # Strava Fixer
 
 Fix the GPS points in an activity where the signal was lost or inaccurate,
-using a map. Only latitude and longitude ever change: heart rate, cadence,
-power, temperature, elevation, laps and every other recorded value are kept
-exactly as they were.
+using a map. Only the GPS positions change, along with the distance and speed
+worked out from them, so a glitch no longer inflates your distance or max
+speed. Heart rate, cadence, power, temperature, elevation, timestamps and
+every other recorded value are kept exactly as they were.
 
 ## How it works
 
@@ -18,9 +19,10 @@ exactly as they were.
    - **Remove GPS from selection** (FIT files only) keeps the samples, with
      their heart rate and so on, but drops their position.
    - **Undo** and **Reset** take changes back.
-3. **Download fixed file.** Before downloading, the app checks that nothing
-   but GPS positions differs from the original, and refuses if anything else
-   changed. Then delete the old activity on Strava and upload the fixed one.
+3. **Download fixed file.** The new total distance is shown above the map.
+   Before downloading, the app checks that nothing but GPS positions,
+   distance and speed differs from the original, and refuses if anything
+   else changed. Then delete the old activity on Strava and upload the fixed one.
 
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
@@ -46,7 +48,9 @@ GitHub runs all three on every pull request (see the "Checks" tab).
 ## How the code is organised
 
 - `src/lib/fit.ts` and `src/lib/gpx.ts` read the files and write back only
-  the position values, leaving every other byte untouched.
+  the position values (and, for FIT, the distance and speed fields), leaving
+  every other byte untouched. Distance is adjusted only where you edited:
+  untouched stretches keep the watch's own distance.
 - `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.

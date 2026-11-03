@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity";
 import { clearPositions, countChanged, movePoint, straighten, type TrackPoint } from "@/lib/track";
 import type { Selection } from "./MapView";
@@ -10,6 +10,10 @@ import styles from "./Editor.module.css";
 // Leaflet needs the browser, so the map is only loaded on the client.
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
+function formatKm(metres: number): string {
+  return `${(metres / 1000).toFixed(2)} km`;
+}
+
 export default function Editor() {
   const [activity, setActivity] = useState<LoadedActivity | null>(null);
   const [history, setHistory] = useState<TrackPoint[][]>([]);
@@ -17,6 +21,11 @@ export default function Editor() {
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
   const points = history[history.length - 1];
+
+  const distances = useMemo(() => {
+    if (!activity || !points) return null;
+    return { before: activity.distance(activity.points), after: activity.distance(points) };
+  }, [activity, points]);
 
   const openFile = async (file: File | undefined) => {
     if (!file) return;
@@ -83,7 +92,8 @@ export default function Editor() {
     URL.revokeObjectURL(url);
     setMessage({
       kind: "info",
-      text: "Downloaded. The safety check confirmed that only GPS positions changed.",
+      text:
+        "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.",
     });
   };
 
@@ -144,6 +154,8 @@ export default function Editor() {
       </div>
       <p className={styles.status}>
         {points.length} points · {changed} changed
+        {distances?.before != null && distances.after != null &&
+          ` · distance ${formatKm(distances.before)}${changed ? ` → ${formatKm(distances.after)}` : ""}`}
         {selection &&
           ` · selected ${isRange ? `points ${Math.min(selection.from, selection.to) + 1}–${Math.max(selection.from, selection.to) + 1}` : `point ${selection.from + 1}`}`}
         {" · "}Click a point to select it, shift-click another to select a range, drag a point to move it.
