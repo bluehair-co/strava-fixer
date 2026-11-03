@@ -18,6 +18,8 @@ interface Props {
   /** Called after shift+dragging a box: the first and last point inside it. */
   onBoxSelect: (from: number, to: number) => void;
   onMove: (index: number, lat: number, lon: number) => void;
+  /** When true, recorded points can't be dragged (added points still can). */
+  locked?: boolean;
   /** When true, clicking the map adds a point there. */
   addMode?: boolean;
   /** Add a point at lat/lon between points `after` and `after + 1`. */
@@ -74,7 +76,7 @@ function nearestStretch(map: L.Map, points: TrackPoint[], at: L.Point): number {
   return best;
 }
 
-export default function MapView({ original, points, selection, onSelect, onBoxSelect, onMove, addMode = false, onInsert }: Props) {
+export default function MapView({ original, points, selection, onSelect, onBoxSelect, onMove, addMode = false, onInsert, locked = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -198,7 +200,7 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
         bubblingMouseEvents: false,
       }).addTo(layers);
       marker.bindTooltip(
-        `${p.added ? "Added point" : "Point"} ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}`,
+        `${p.added ? "Added point" : "Point"} ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}${locked && !p.added ? " · locked" : ""}`,
         { direction: "top" },
       );
 
@@ -211,6 +213,8 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
         // Listen on the whole page: while dragging, the pointer is over the
         // marker itself, which would otherwise swallow the map's events.
         const onMouseMove = (ev: MouseEvent) => {
+          // A locked point can be clicked to select it, but not dragged.
+          if (locked && !p.added) return;
           const here = map.mouseEventToContainerPoint(ev);
           if (!moved && here.distanceTo(start) < 4) return;
           moved = true;
@@ -235,7 +239,7 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
         document.addEventListener("mouseup", onMouseUp);
       });
     });
-  }, [original, points, selection]);
+  }, [original, points, selection, locked]);
 
   return <div ref={containerRef} style={{ height: "100%", width: "100%" }} />;
 }

@@ -31,6 +31,8 @@ export default function Editor() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
   const [addMode, setAddMode] = useState(false);
+  // Locked: recorded points can't be moved by mistake; added points still can.
+  const [locked, setLocked] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
   const points = history[history.length - 1];
@@ -107,7 +109,7 @@ export default function Editor() {
   const doStraighten = () => {
     if (!selection) return;
     try {
-      apply(straighten(points, selection.from, selection.to));
+      apply(straighten(points, selection.from, selection.to, locked));
       setMessage(null);
     } catch (err) {
       setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) });
@@ -206,10 +208,22 @@ export default function Editor() {
         >
           {addMode ? "Done adding points" : "Add points"}
         </button>
+        <button
+          onClick={() => setLocked((on) => !on)}
+          aria-pressed={locked}
+          className={locked ? styles.active : undefined}
+          title={
+            locked
+              ? "Recorded points are frozen. Click to allow moving them again."
+              : "Freeze the recorded points so they can't be moved by mistake. Points you add can still be moved."
+          }
+        >
+          {locked ? "🔒 Recorded points locked" : "🔓 Lock recorded points"}
+        </button>
         <button className={styles.primary} onClick={download} disabled={changed === 0}>
           Download fixed file
         </button>
-        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); }}>Open another file</button>
+        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); setLocked(false); }}>Open another file</button>
       </div>
       <p className={styles.status}>
         {points.length} points · {moved} changed{added > 0 && ` · ${added} added`}
@@ -219,6 +233,7 @@ export default function Editor() {
         {addMode
           ? "Click on the map to add a point to the nearest stretch of track. Its time is worked out from how far along the stretch it is. Drag points to move them."
           : "Click a point to select it. Shift-click another point, or hold Shift and drag a box, to select a range. Drag a point to move it."}
+        {locked && " Recorded points are locked: only points you added can be moved."}
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
       {showNextSteps && <NextSteps onClose={() => setShowNextSteps(false)} />}
@@ -232,6 +247,7 @@ export default function Editor() {
             onBoxSelect={onBoxSelect}
             onMove={onMove}
             addMode={addMode}
+            locked={locked}
             onInsert={onInsert}
           />
         </div>
@@ -242,6 +258,7 @@ export default function Editor() {
             from={lo}
             to={hi}
             canRemoveGps={activity.kind === "fit"}
+            locked={locked}
             onExtend={extendSelection}
             onStraighten={doStraighten}
             onRemoveGps={doRemove}

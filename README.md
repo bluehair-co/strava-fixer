@@ -33,6 +33,10 @@ every other recorded value are kept exactly as they were.
      distance and speed): no heart rate, cadence, power or elevation is made
      up for it. Times are whole seconds, as that's all FIT files store.
      **Delete added point** in the side panel removes it again.
+   - **Lock recorded points** freezes the points from your recording, so you
+     can't move them by mistake (you can still click to select them). Points
+     you added can still be dragged, and **Straighten** only lines up added
+     points. Click it again to unlock.
    - **Undo** and **Reset** take changes back.
 3. **Download fixed file.** The new total distance is shown above the map.
    Before downloading, the app checks that nothing but GPS positions,

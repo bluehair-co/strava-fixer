@@ -10,6 +10,7 @@ import {
   metresBetween,
   movePoint,
   retime,
+  straighten,
   type TrackPoint,
 } from "./track";
 
@@ -84,6 +85,16 @@ describe("added point times", () => {
     const cleared = clearPositions(out, 2, 2);
     expect(cleared.filter((p) => p.added)).toHaveLength(0);
     expect(cleared).toHaveLength(3);
+  });
+
+  it("only lines up added points when recorded points are locked", () => {
+    const pts = line();
+    // Knock the middle recorded point off the line, then add a point off the line too.
+    let out = movePoint(pts, 1, 52.371, pts[1].lon!);
+    out = insertPoint(out, 0, 52.372, (pts[0].lon! + pts[1].lon!) / 2);
+    const straight = straighten(out, 0, 3, true);
+    expect(straight[2]).toEqual(out[2]); // recorded point untouched
+    expect(straight[1].lat).not.toBe(out[1].lat); // added point moved
   });
 
   it("leaves tracks without added points alone", () => {
