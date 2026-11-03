@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Decoder, Encoder, Profile, Stream } from "@garmin/fitsdk";
-import { parseFit, verifyFit, writeFit } from "./fit";
-import { clearPositions, movePoint, straighten } from "./track";
+import { parseFit, reportedDistance, verifyFit, writeFit } from "./fit";
+import { clearPositions, metresBetween, movePoint, straighten, trackLength } from "./track";
 
 const toSemi = (deg: number) => Math.round((deg * 2 ** 31) / 180);
 
@@ -45,6 +45,71 @@ function makeFit(): Uint8Array {
   return encoder.close();
 }
 
+/**
+ * 60 s ride heading east at 5 m/s, with a GPS glitch that jumps 200 m north
+ * for points 20-24. Distance and speed are computed from GPS the way a watch
+ * without a speed sensor would. Two laps of 30 s plus a session.
+ */
+function makeGlitchFit(): Uint8Array {
+  const encoder = new Encoder();
+  const write = (num: number, mesg: object) => encoder.onMesg(num, mesg as Parameters<Encoder["onMesg"]>[1]);
+  const start = new Date("2026-10-01T08:00:00Z").getTime();
+  const lat0 = 52.37;
+  const lonStep = 5 / (111320 * Math.cos((lat0 * Math.PI) / 180)); // 5 m east
+  const latGlitch = 200 / 111320; // 200 m north
+  write(Profile.MesgNum.FILE_ID, { type: "activity", manufacturer: "development", product: 1, timeCreated: new Date(start) });
+  let cumulative = 0;
+  let prev: [number, number] | null = null;
+  const lapDist = [0, 0];
+  const lapMax = [0, 0];
+  for (let i = 0; i < 60; i++) {
+    const lat = lat0 + (i >= 20 && i < 25 ? latGlitch : 0);
+    const lon = 4.89 + i * lonStep;
+    const step = prev ? metresBetween(prev[0], prev[1], lat, lon) : 0;
+    cumulative += step;
+    prev = [lat, lon];
+    const lap = i < 30 ? 0 : 1;
+    lapDist[lap] += step;
+    lapMax[lap] = Math.max(lapMax[lap], step);
+    write(Profile.MesgNum.RECORD, {
+      timestamp: new Date(start + i * 1000),
+      positionLat: toSemi(lat),
+      positionLong: toSemi(lon),
+      distance: cumulative,
+      speed: step,
+      enhancedSpeed: step,
+      heartRate: 130 + (i % 7),
+      cadence: 90,
+    });
+  }
+  for (const lap of [0, 1]) {
+    write(Profile.MesgNum.LAP, {
+      timestamp: new Date(start + (lap * 30 + 29) * 1000),
+      startTime: new Date(start + lap * 30 * 1000),
+      totalElapsedTime: 30,
+      totalTimerTime: 30,
+      totalDistance: lapDist[lap],
+      avgSpeed: lapDist[lap] / 30,
+      maxSpeed: lapMax[lap],
+      enhancedAvgSpeed: lapDist[lap] / 30,
+      enhancedMaxSpeed: lapMax[lap],
+    });
+  }
+  write(Profile.MesgNum.SESSION, {
+    timestamp: new Date(start + 59000),
+    startTime: new Date(start),
+    totalElapsedTime: 60,
+    totalTimerTime: 60,
+    totalDistance: cumulative,
+    avgSpeed: cumulative / 60,
+    maxSpeed: Math.max(...lapMax),
+    enhancedAvgSpeed: cumulative / 60,
+    enhancedMaxSpeed: Math.max(...lapMax),
+    sport: "cycling",
+  });
+  return encoder.close();
+}
+
 function decode(bytes: Uint8Array) {
   const decoder = new Decoder(Stream.fromByteArray(Array.from(bytes)));
   expect(decoder.checkIntegrity()).toBe(true);
@@ -72,7 +137,7 @@ describe("FIT", () => {
     expect(fixed).toEqual(original);
   });
 
-  it("changes only positions when editing", () => {
+  it("changes only positions, distance and speed when editing", () => {
     const original = makeFit();
     const parsed = parseFit(original);
     let points = movePoint(parsed.points, 3, 52.5, 4.95);
@@ -85,13 +150,18 @@ describe("FIT", () => {
     const before = decode(original);
     const after = decode(fixed);
     const strip = (r: Record<string, unknown>) => {
-      const { positionLat, positionLong, ...rest } = r;
-      void positionLat;
-      void positionLong;
+      // These are allowed to change; everything else must be identical.
+      const { positionLat, positionLong, distance, speed, enhancedSpeed, ...rest } = r;
+      void [positionLat, positionLong, distance, speed, enhancedSpeed];
       return rest;
     };
     expect(after.recordMesgs.map(strip)).toEqual(before.recordMesgs.map(strip));
-    expect(after.sessionMesgs).toEqual(before.sessionMesgs);
+    const stripSession = (r: Record<string, unknown>) => {
+      const { totalDistance, avgSpeed, maxSpeed, enhancedAvgSpeed, enhancedMaxSpeed, ...rest } = r;
+      void [totalDistance, avgSpeed, maxSpeed, enhancedAvgSpeed, enhancedMaxSpeed];
+      return rest;
+    };
+    expect(after.sessionMesgs.map(stripSession)).toEqual(before.sessionMesgs.map(stripSession));
     expect(after.fileIdMesgs).toEqual(before.fileIdMesgs);
 
     // record 3 moved; records are offset by one after the position-less record 5
@@ -103,6 +173,41 @@ describe("FIT", () => {
 
     const reparsed = parseFit(fixed);
     expect(reparsed.points[8].lat).toBeCloseTo((points[8].lat as number), 6);
+  });
+
+  it("recalculates distance and speed after fixing a GPS glitch", () => {
+    const original = makeGlitchFit();
+    const parsed = parseFit(original);
+    expect(reportedDistance(original, parsed)!).toBeGreaterThan(600); // glitch adds ~400 m
+
+    const fixedPoints = straighten(parsed.points, 19, 25);
+    const fixed = writeFit(original, parsed, fixedPoints);
+    expect(verifyFit(original, fixed, parsed)).toEqual([]);
+
+    const before = decode(original);
+    const after = decode(fixed);
+    const session = after.sessionMesgs[0];
+    // 59 steps of 5 m
+    expect(session.totalDistance as number).toBeCloseTo(trackLength(fixedPoints), 0);
+    expect(session.totalDistance as number).toBeCloseTo(295, 0);
+    expect(session.avgSpeed as number).toBeCloseTo((session.totalDistance as number) / 60, 2);
+    expect(session.maxSpeed as number).toBeCloseTo(5, 1); // the glitch's fake 40 m/s is gone
+
+    // Laps add up to the session, and the first lap (which had the glitch) shrank.
+    const laps = after.lapMesgs;
+    expect((laps[0].totalDistance as number) + (laps[1].totalDistance as number)).toBeCloseTo(295, 0);
+    expect(laps[1].totalDistance).toBe(before.lapMesgs[1].totalDistance);
+
+    // Record distances keep increasing, and untouched records keep their speed.
+    const dist = after.recordMesgs.map((r) => r.distance as number);
+    for (let i = 1; i < dist.length; i++) expect(dist[i]).toBeGreaterThanOrEqual(dist[i - 1]);
+    expect(dist[dist.length - 1]).toBeCloseTo(295, 0);
+    expect(after.recordMesgs[5].speed).toBe(before.recordMesgs[5].speed);
+    expect(after.recordMesgs[50].speed).toBe(before.recordMesgs[50].speed);
+    expect(after.recordMesgs[22].speed as number).toBeCloseTo(5, 1);
+
+    // Heart rate etc. untouched.
+    expect(after.recordMesgs.map((r) => r.heartRate)).toEqual(before.recordMesgs.map((r) => r.heartRate));
   });
 
   it("flags changes outside position fields", () => {

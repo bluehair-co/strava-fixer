@@ -1,13 +1,15 @@
-import { isFit, parseFit, verifyFit, writeFit } from "./fit";
+import { isFit, parseFit, reportedDistance, verifyFit, writeFit } from "./fit";
 import { isGpx, parseGpx, verifyGpx, writeGpx } from "./gpx";
-import type { TrackPoint } from "./track";
+import { trackLength, type TrackPoint } from "./track";
 
 export interface LoadedActivity {
   kind: "fit" | "gpx";
   fileName: string;
   points: TrackPoint[];
-  /** Builds the fixed file and checks nothing but positions changed. */
+  /** Builds the fixed file and checks nothing but positions (and distance/speed) changed. */
   build(points: TrackPoint[]): { data: Uint8Array; problems: string[] };
+  /** Total distance in metres for these points, as the fixed file would report it. */
+  distance(points: TrackPoint[]): number | null;
 }
 
 function isGzip(bytes: Uint8Array): boolean {
@@ -39,6 +41,10 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
         const data = writeFit(raw, parsed, points);
         return { data, problems: verifyFit(raw, data, parsed) };
       },
+      distance(points) {
+        // Falls back to the GPS track length if the file stores no distance.
+        return reportedDistance(writeFit(raw, parsed, points), parsed) ?? trackLength(points);
+      },
     };
   }
   const text = new TextDecoder().decode(raw);
@@ -52,6 +58,8 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
         const fixed = writeGpx(text, parsed, points);
         return { data: new TextEncoder().encode(fixed), problems: verifyGpx(text, fixed, parsed) };
       },
+      // GPX files don't store distance; Strava measures it from the track.
+      distance: trackLength,
     };
   }
   throw new Error("Please choose a .fit or .gpx file (or a .gz of one).");

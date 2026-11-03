@@ -9,10 +9,13 @@ These are David's standing preferences. Follow them in every session.
   any step he has to do himself.
 
 ## The app's core rule
-- Only GPS positions (latitude/longitude) may ever change in an activity file.
-  Heart rate, cadence, power, temperature, elevation, timestamps, laps and
-  every other recorded field must stay exactly as recorded. The download
-  safety check (`verifyFit` / `verifyGpx`) enforces this; never weaken it.
+- Only GPS positions (latitude/longitude), and the distance and speed values
+  calculated from them, may change in an activity file. Heart rate, cadence,
+  power, temperature, elevation, timestamps and every other recorded field
+  must stay exactly as recorded. Recalculating distance from the fixed track
+  is wanted: fixing wrong distances is part of the point of the app. The
+  download safety check (`verifyFit` / `verifyGpx`) enforces this; never
+  weaken it beyond those fields.
 
 ## Decisions so far
 - Files only for now: no Strava API (creating an API app needs a paid Strava

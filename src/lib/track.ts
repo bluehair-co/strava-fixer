@@ -55,3 +55,34 @@ export function countChanged(original: TrackPoint[], current: TrackPoint[]): num
   }
   return n;
 }
+
+const EARTH_RADIUS_M = 6371008.8;
+
+/** Straight-line distance in metres between two positions (haversine). */
+export function metresBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLon = (lon2 - lon1) * rad;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * For each point, the distance travelled since the previous point that has a
+ * position (0 for the first point and for points without a position).
+ */
+export function stepDistances(points: TrackPoint[]): number[] {
+  let prev: TrackPoint | null = null;
+  return points.map((p) => {
+    if (p.lat === null || p.lon === null) return 0;
+    const d = prev ? metresBetween(prev.lat!, prev.lon!, p.lat, p.lon) : 0;
+    prev = p;
+    return d;
+  });
+}
+
+/** Total straight-line length of the track in metres. */
+export function trackLength(points: TrackPoint[]): number {
+  return stepDistances(points).reduce((a, b) => a + b, 0);
+}
