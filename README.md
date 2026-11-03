@@ -27,7 +27,9 @@ every other recorded value are kept exactly as they were.
 3. **Download fixed file.** The new total distance is shown above the map.
    Before downloading, the app checks that nothing but GPS positions,
    distance and speed differs from the original, and refuses if anything
-   else changed. Then delete the old activity on Strava and upload the fixed one.
+   else changed. Then delete the old activity on Strava and upload the fixed one:
+   after downloading, the app shows buttons that open the original activity
+   (paste its Strava link to go straight to it) and Strava's upload page.
 
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.

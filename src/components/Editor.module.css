@@ -169,3 +169,60 @@
     max-height: 40vh;
   }
 }
+
+.nextSteps {
+  position: relative;
+  border: 1px solid #fc4c02;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.nextSteps ol {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.nextSteps li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.linkInput {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: #555;
+  width: min(420px, 100%);
+}
+
+.linkInput input {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #c4c4c4;
+  border-radius: 6px;
+}
+
+.linkButton {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border-radius: 6px;
+  background: #fc4c02;
+  color: #fff !important;
+}
+
+.closeButton {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  border: none;
+  background: none;
+  color: #666;
+  cursor: pointer;
+}
