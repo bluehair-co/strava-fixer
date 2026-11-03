@@ -16,10 +16,13 @@ every other recorded value are kept exactly as they were.
    uploaded). On the map:
    - **Drag** a point to move it.
    - **Click** a point to select it, then **shift-click** another to select
-     everything in between. **Straighten selection** lines those points up
-     between the two ends, spaced by their recorded time.
-   - **Remove GPS from selection** (FIT files only) keeps the samples, with
-     their heart rate and so on, but drops their position.
+     everything in between, or hold **Shift** and **drag a box** on the map.
+   - A side panel lists the selected points (number and time). **+ Point
+     before / after** grows the selection by one point on that side.
+   - **Straighten** lines the selected points up between the two ends,
+     spaced by their recorded time.
+   - **Remove GPS** (FIT files only) keeps the samples, with their heart rate
+     and so on, but drops their position.
    - **Undo** and **Reset** take changes back.
 3. **Download fixed file.** The new total distance is shown above the map.
    Before downloading, the app checks that nothing but GPS positions,
