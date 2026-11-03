@@ -15,9 +15,10 @@ export interface TrackPoint {
 /**
  * Moves every point strictly between `from` and `to` onto the straight line
  * joining them. Points are spaced by their recorded time when every point has
- * one (so pauses stay pauses), otherwise evenly.
+ * one (so pauses stay pauses), otherwise evenly. With `onlyAdded`, recorded
+ * points (which are locked) stay where they are and only added points move.
  */
-export function straighten(points: TrackPoint[], from: number, to: number): TrackPoint[] {
+export function straighten(points: TrackPoint[], from: number, to: number, onlyAdded = false): TrackPoint[] {
   const [a, b] = from < to ? [from, to] : [to, from];
   const start = points[a];
   const end = points[b];
@@ -31,7 +32,7 @@ export function straighten(points: TrackPoint[], from: number, to: number): Trac
     points.slice(a, b + 1).every((p) => p.time !== null);
 
   return points.map((p, i) => {
-    if (i <= a || i >= b) return p;
+    if (i <= a || i >= b || (onlyAdded && !p.added)) return p;
     const t = useTime
       ? (p.time! - start.time!) / (end.time! - start.time!)
       : (i - a) / (b - a);

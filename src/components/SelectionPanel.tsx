@@ -9,6 +9,8 @@ interface Props {
   from: number;
   to: number;
   canRemoveGps: boolean;
+  /** Recorded points are locked: only added points can be changed. */
+  locked: boolean;
   onExtend: (side: "before" | "after") => void;
   onStraighten: () => void;
   onRemoveGps: () => void;
@@ -27,6 +29,7 @@ export default function SelectionPanel({
   from,
   to,
   canRemoveGps,
+  locked,
   onExtend,
   onStraighten,
   onRemoveGps,
@@ -78,10 +81,14 @@ export default function SelectionPanel({
       </div>
 
       <div className={styles.panelButtons}>
-        <button onClick={onStraighten} disabled={count < 3} title="Line up the points between the first and last selected point">
+        <button onClick={onStraighten} disabled={count < 3} title={
+            locked
+              ? "Line up the added points between the first and last selected point (recorded points are locked)"
+              : "Line up the points between the first and last selected point"
+          }>
           Straighten
         </button>
-        {canRemoveGps && (
+        {canRemoveGps && !locked && (
           <button onClick={onRemoveGps} title="Keep the samples (heart rate etc.) but drop their GPS position. Added points are deleted.">
             Remove GPS
           </button>
