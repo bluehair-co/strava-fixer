@@ -110,6 +110,11 @@ function makeGlitchFit(): Uint8Array {
   return encoder.close();
 }
 
+/** The i-th recorded distance value in a decoded file. */
+function cumulativeAt(messages: Record<string, Record<string, unknown>[]>, i: number): number {
+  return messages.recordMesgs.filter((r) => r.distance !== undefined)[i].distance as number;
+}
+
 function decode(bytes: Uint8Array) {
   const decoder = new Decoder(Stream.fromByteArray(Array.from(bytes)));
   expect(decoder.checkIntegrity()).toBe(true);
@@ -207,6 +212,64 @@ describe("FIT", () => {
     expect(after.recordMesgs[22].speed as number).toBeCloseTo(5, 1);
 
     // Heart rate etc. untouched.
+    expect(after.recordMesgs.map((r) => r.heartRate)).toEqual(before.recordMesgs.map((r) => r.heartRate));
+  });
+
+  it("handles files that keep distance in separate records (like Strava app recordings)", () => {
+    // 120 s: ride 40 s east at 5 m/s, stand still 40 s (GPS wanders 30 m
+    // around, so the recorded distance grows by ~150 m), then ride 40 s more.
+    // Distance and heart rate are stored in their own records, and the lap
+    // and session have no end timestamp, as in files from the Strava app.
+    const encoder = new Encoder();
+    const write = (num: number, mesg: object) => encoder.onMesg(num, mesg as Parameters<Encoder["onMesg"]>[1]);
+    const start = new Date("2026-10-01T08:00:00Z").getTime();
+    const lat0 = 52.37;
+    const lonStep = 5 / (111320 * Math.cos((lat0 * Math.PI) / 180));
+    write(Profile.MesgNum.FILE_ID, { type: "activity", manufacturer: "strava", product: 201, timeCreated: new Date(start) });
+    let cumulative = 0;
+    let prev: [number, number] | null = null;
+    for (let i = 0; i < 120; i++) {
+      const moving = i < 40 ? i : i < 80 ? 40 : i - 40;
+      const wander = i >= 40 && i < 80 ? (i % 2 ? 30 : -30) / 111320 : 0;
+      const lat = lat0 + wander;
+      const lon = 4.89 + moving * lonStep;
+      const step = prev ? metresBetween(prev[0], prev[1], lat, lon) : 0;
+      cumulative += step * 0.95; // the app smooths a little, so it's not exactly GPS
+      prev = [lat, lon];
+      const timestamp = new Date(start + i * 1000);
+      write(Profile.MesgNum.RECORD, { timestamp, heartRate: 100 + (i % 30) });
+      write(Profile.MesgNum.RECORD, { timestamp, distance: cumulative });
+      write(Profile.MesgNum.RECORD, { timestamp, positionLat: toSemi(lat), positionLong: toSemi(lon), enhancedSpeed: step });
+    }
+    write(Profile.MesgNum.LAP, { startTime: new Date(start), totalTimerTime: 120, totalDistance: cumulative });
+    write(Profile.MesgNum.SESSION, { startTime: new Date(start), totalTimerTime: 120, totalDistance: cumulative, sport: "cycling" });
+    const original = encoder.close();
+
+    const parsed = parseFit(original);
+    expect(parsed.points).toHaveLength(120);
+    // Put the standing-still points back where the rider actually was.
+    const fixedPoints = straighten(parsed.points, 39, 80);
+    const fixed = writeFit(original, parsed, fixedPoints);
+    expect(verifyFit(original, fixed, parsed)).toEqual([]);
+
+    const before = decode(original);
+    const after = decode(fixed);
+    const distances = after.recordMesgs.filter((r) => r.distance !== undefined).map((r) => r.distance as number);
+    // Never goes backwards and has no sudden jumps.
+    for (let i = 1; i < distances.length; i++) {
+      expect(distances[i]).toBeGreaterThanOrEqual(distances[i - 1]);
+      expect(distances[i] - distances[i - 1]).toBeLessThan(6);
+    }
+    // Riding parts keep the app's own distance per step; standing still adds ~0.
+    const at = (i: number) => distances[i];
+    expect(at(39)).toBeCloseTo(cumulativeAt(before, 39), 1);
+    expect(at(80) - at(39)).toBeCloseTo(5, 0); // just the one real 5 m step
+    expect(at(119) - at(80)).toBeCloseTo(cumulativeAt(before, 119) - cumulativeAt(before, 80), 1);
+    // Lap and session totals follow, even without end timestamps.
+    expect(after.sessionMesgs[0].totalDistance as number).toBeCloseTo(at(119), 1);
+    expect(after.lapMesgs[0].totalDistance as number).toBeCloseTo(at(119), 1);
+    expect(before.sessionMesgs[0].totalDistance as number).toBeGreaterThan(at(119) + 100);
+    // Heart rate untouched, sample for sample.
     expect(after.recordMesgs.map((r) => r.heartRate)).toEqual(before.recordMesgs.map((r) => r.heartRate));
   });
 
