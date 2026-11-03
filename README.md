@@ -35,7 +35,8 @@ every other recorded value are kept exactly as they were.
 
 If you recorded the same activity on two devices, say your phone (good GPS)
 and your watch (heart rate, but GPS that started late or never came), the
-**Merge watch + phone** tab turns them into one activity:
+**Merge or join recordings** tab (option *Same activity on two devices*)
+turns them into one activity:
 
 1. Export the original file of both activities from Strava.
 2. Choose the phone's file as **recording 1** (only its GPS track is used) and
@@ -50,6 +51,17 @@ The same safety check applies: compared with the watch's file, only GPS
 positions, distance and speed may differ. If the watch saved its samples with
 no room for a position at all, the app adds empty latitude/longitude fields
 to them first (this is the one case where the file grows).
+
+## Joining recordings made one after the other
+
+If one device ran out of battery and you carried on recording with another,
+choose *One after the other* in the same tab and pick both files (two FIT
+files or two GPX files; either order, the app sorts them by time). Every
+sample of both files is kept as recorded; the gap between them shows up as a
+pause. The only value that changes is the second part's running distance,
+which carries on from where the first part stopped (plus the straight line
+between where one ended and the other began). Then delete both originals on
+Strava and upload the joined file.
 
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
@@ -80,7 +92,8 @@ GitHub runs all three on every pull request (see the "Checks" tab).
   untouched stretches keep the watch's own distance.
 - `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
 - `src/lib/merge.ts` lines up two recordings by time and copies the GPS
-  track from one into the other; `src/components/Merge.tsx` is its page.
+  track from one into the other; `src/lib/join.ts` puts two recordings one
+  after the other. `src/components/Merge.tsx` is the page for both.
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.
 

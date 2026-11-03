@@ -19,7 +19,7 @@ export default function NextSteps({ onClose, merged = false }: { onClose: () => 
         </li>
         <li>
           <span>
-            <b>2. Upload the {merged ? "merged" : "fixed"} file.</b> Do this after deleting, or Strava
+            <b>2. Upload the {merged ? "new" : "fixed"} file.</b> Do this after deleting, or Strava
             will reject it as a duplicate.
           </span>
           <a className={styles.linkButton} href={STRAVA_UPLOAD} target="_blank" rel="noopener noreferrer">
