@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity";
 import { clearPositions, countChanged, movePoint, straighten, type TrackPoint } from "@/lib/track";
 import type { Selection } from "./MapView";
+import SelectionPanel from "./SelectionPanel";
 import styles from "./Editor.module.css";
 
 // Leaflet needs the browser, so the map is only loaded on the client.
@@ -53,7 +54,20 @@ export default function Editor() {
     [],
   );
 
-  const isRange = selection !== null && selection.from !== selection.to;
+  const onBoxSelect = useCallback((from: number, to: number) => setSelection({ from, to }), []);
+
+  // The selection as first and last index, whichever way it was made.
+  const lo = selection ? Math.min(selection.from, selection.to) : -1;
+  const hi = selection ? Math.max(selection.from, selection.to) : -1;
+
+  const extendSelection = (side: "before" | "after") => {
+    if (!selection) return;
+    setSelection(
+      side === "before"
+        ? { from: Math.max(0, lo - 1), to: hi }
+        : { from: lo, to: Math.min(points.length - 1, hi + 1) },
+    );
+  };
 
   const doStraighten = () => {
     if (!selection) return;
@@ -133,14 +147,6 @@ export default function Editor() {
     <div className={styles.editor}>
       <div className={styles.toolbar}>
         <span className={styles.file}>{activity.fileName}</span>
-        <button onClick={doStraighten} disabled={!isRange} title="Line up the points between the two ends of the selection">
-          Straighten selection
-        </button>
-        {activity.kind === "fit" && (
-          <button onClick={doRemove} disabled={!selection} title="Keep the samples (heart rate etc.) but drop their GPS position">
-            Remove GPS from selection
-          </button>
-        )}
         <button onClick={() => setHistory((h) => h.slice(0, -1))} disabled={history.length < 2}>
           Undo
         </button>
@@ -156,19 +162,34 @@ export default function Editor() {
         {points.length} points · {changed} changed
         {distances?.before != null && distances.after != null &&
           ` · distance ${formatKm(distances.before)}${changed ? ` → ${formatKm(distances.after)}` : ""}`}
-        {selection &&
-          ` · selected ${isRange ? `points ${Math.min(selection.from, selection.to) + 1}–${Math.max(selection.from, selection.to) + 1}` : `point ${selection.from + 1}`}`}
-        {" · "}Click a point to select it, shift-click another to select a range, drag a point to move it.
+        {" · "}Click a point to select it. Shift-click another point, or hold Shift and drag a box, to select a
+        range. Drag a point to move it.
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
-      <div className={styles.map}>
-        <MapView
-          original={activity.points}
-          points={points}
-          selection={selection}
-          onSelect={onSelect}
-          onMove={onMove}
-        />
+      <div className={styles.workspace}>
+        <div className={styles.map}>
+          <MapView
+            original={activity.points}
+            points={points}
+            selection={selection}
+            onSelect={onSelect}
+            onBoxSelect={onBoxSelect}
+            onMove={onMove}
+          />
+        </div>
+        {selection && (
+          <SelectionPanel
+            points={points}
+            original={activity.points}
+            from={lo}
+            to={hi}
+            canRemoveGps={activity.kind === "fit"}
+            onExtend={extendSelection}
+            onStraighten={doStraighten}
+            onRemoveGps={doRemove}
+            onClear={() => setSelection(null)}
+          />
+        )}
       </div>
     </div>
   );
