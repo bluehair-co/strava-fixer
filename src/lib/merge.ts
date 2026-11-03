@@ -63,7 +63,7 @@ interface Visitor {
 }
 
 /** Walks every message of a FIT file (all segments), calling the visitor. */
-function walkFit(bytes: Uint8Array, visit: Visitor) {
+export function walkFit(bytes: Uint8Array, visit: Visitor) {
   if (!isFit(bytes)) throw new Error("This doesn't look like a FIT file.");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let segStart = 0;
@@ -121,7 +121,7 @@ function walkFit(bytes: Uint8Array, visit: Visitor) {
 }
 
 /** One data message as raw bytes per field, for comparing two files. */
-interface RawMessage {
+export interface RawMessage {
   globalNum: number;
   header: number;
   fields: Map<number, string>;
@@ -130,7 +130,7 @@ interface RawMessage {
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-function readMessages(bytes: Uint8Array): RawMessage[] {
+export function readMessages(bytes: Uint8Array): RawMessage[] {
   const out: RawMessage[] = [];
   walkFit(bytes, {
     data(def, start) {
@@ -220,7 +220,7 @@ export function addPositionFields(bytes: Uint8Array): Uint8Array {
   return added ? concat(chunks) : bytes;
 }
 
-function concat(parts: Uint8Array[]): Uint8Array {
+export function concat(parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
   for (const p of parts) {
