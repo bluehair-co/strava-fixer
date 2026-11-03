@@ -1,0 +1,83 @@
+.start {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 3rem 1rem;
+  border: 2px dashed #c4c4c4;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.drop:hover {
+  border-color: #fc4c02;
+}
+
+.hint {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 6rem);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.toolbar button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #c4c4c4;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  cursor: pointer;
+}
+
+.toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.toolbar .primary {
+  background: #fc4c02;
+  border-color: #fc4c02;
+  color: #fff;
+}
+
+.file {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.status {
+  font-size: 0.85rem;
+  color: #555;
+  margin: 0.5rem 0;
+}
+
+.error {
+  color: #b00020;
+}
+
+.info {
+  color: #1b7a3a;
+}
+
+.map {
+  flex: 1;
+  min-height: 300px;
+  border-radius: 8px;
+  overflow: hidden;
+}

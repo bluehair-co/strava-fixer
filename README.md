@@ -5,14 +5,22 @@ using a map. Only latitude and longitude ever change: heart rate, cadence,
 power, temperature, elevation, laps and every other recorded value are kept
 exactly as they were.
 
-## How it will work
+## How it works
 
 1. On strava.com, open your activity, click the "..." menu and choose
    **Export Original** to download the original FIT or GPX file.
-2. Open that file in Strava Fixer, then drag, straighten or remove the bad
-   points on the map.
-3. Download the fixed file, delete the old activity on Strava, and upload
-   the fixed one.
+2. Open that file in Strava Fixer (it stays on your computer, nothing is
+   uploaded). On the map:
+   - **Drag** a point to move it.
+   - **Click** a point to select it, then **shift-click** another to select
+     everything in between. **Straighten selection** lines those points up
+     between the two ends, spaced by their recorded time.
+   - **Remove GPS from selection** (FIT files only) keeps the samples, with
+     their heart rate and so on, but drops their position.
+   - **Undo** and **Reset** take changes back.
+3. **Download fixed file.** Before downloading, the app checks that nothing
+   but GPS positions differs from the original, and refuses if anything else
+   changed. Then delete the old activity on Strava and upload the fixed one.
 
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
@@ -31,8 +39,17 @@ automatically.
 
 ## Checks
 
-`npm run lint` looks for common mistakes and `npm run build` makes sure the
-app compiles. GitHub runs both on every pull request (see the "Checks" tab).
+`npm run lint` looks for common mistakes, `npm test` runs the automated tests
+(in `src/lib/*.test.ts`), and `npm run build` makes sure the app compiles.
+GitHub runs all three on every pull request (see the "Checks" tab).
+
+## How the code is organised
+
+- `src/lib/fit.ts` and `src/lib/gpx.ts` read the files and write back only
+  the position values, leaving every other byte untouched.
+- `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
+- `src/components/Editor.tsx` is the page with the buttons;
+  `src/components/MapView.tsx` draws the map using Leaflet.
 
 ## License
 
