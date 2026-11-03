@@ -18,6 +18,7 @@
  * FIT format reference: https://developer.garmin.com/fit/protocol/
  */
 
+import { buildDistanceModel } from "./distance";
 import { stepDistances, type TrackPoint } from "./track";
 
 const SESSION_MESG = 18;
@@ -332,8 +333,6 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
   });
 
   // 2. Record distance and speed.
-  const before = stepDistances(parsed.points);
-  const after = stepDistances(points);
   const changed = points.map(
     (p, i) => p.lat !== parsed.points[i].lat || p.lon !== parsed.points[i].lon,
   );
@@ -353,69 +352,93 @@ export function writeFit(original: Uint8Array, parsed: ParsedFit, points: TrackP
       touched[i] = true;
     }
   });
+  if (!changed.some(Boolean)) {
+    return finish(out, view, parsed);
+  }
 
-  let shiftMetres = 0; // how much the cumulative distance has changed so far
-  const shiftAtRecord: { time: number | null; shift: number }[] = [];
-  const newSpeeds: { time: number | null; speed: number | null }[] = [];
+  // Each point's time in FIT seconds, so it lines up with record times.
+  const pointTimes = new Array<number | null>(points.length).fill(null);
+  for (const rec of parsed.records) if (rec.point >= 0) pointTimes[rec.point] = rec.time;
+
+  // The file's own distance samples (some files keep them in separate records).
+  const recorded: { t: number; d: number }[] = [];
   for (const rec of parsed.records) {
-    if (rec.point >= 0) shiftMetres += after[rec.point] - before[rec.point];
-    if (rec.distance && shiftMetres !== 0) {
-      const cm = readSlot(view, rec.distance);
-      if (cm !== null) writeSlot(view, rec.distance, cm + shiftMetres * 100);
+    if (rec.time === null || !rec.distance) continue;
+    const cm = readSlot(view, rec.distance);
+    if (cm !== null) recorded.push({ t: rec.time, d: cm / 100 });
+  }
+  recorded.sort((a, b) => a.t - b.t);
+  const model = recorded.length
+    ? buildDistanceModel(parsed.points, points, pointTimes, recorded)
+    : null;
+
+  const steps = stepDistances(points);
+  const newSpeeds: { time: number | null; speed: number | null }[] = [];
+  let lastDistance = 0;
+  for (const rec of parsed.records) {
+    if (model && rec.distance && rec.time !== null && readSlot(view, rec.distance) !== null) {
+      // Never let distance go backwards.
+      const metres = Math.max(lastDistance, model.fixedAt(rec.time));
+      writeSlot(view, rec.distance, metres * 100);
+      lastDistance = metres;
     }
     let speed: number | null = null; // m/s
     if (rec.point >= 0 && touched[rec.point]) {
-      speed = speedAround(points, after, rec.point);
+      speed = speedAround(points, steps, rec.point);
       if (speed !== null) {
-        if (rec.speed) writeSlot(view, rec.speed, speed * 1000);
-        if (rec.enhancedSpeed) writeSlot(view, rec.enhancedSpeed, speed * 1000);
+        if (rec.speed && readSlot(view, rec.speed) !== null) writeSlot(view, rec.speed, speed * 1000);
+        if (rec.enhancedSpeed && readSlot(view, rec.enhancedSpeed) !== null)
+          writeSlot(view, rec.enhancedSpeed, speed * 1000);
       }
     }
     if (speed === null) {
       const raw = rec.enhancedSpeed ? readSlot(view, rec.enhancedSpeed) : rec.speed ? readSlot(view, rec.speed) : null;
       speed = raw === null ? null : raw / 1000;
     }
-    shiftAtRecord.push({ time: rec.time, shift: shiftMetres });
     newSpeeds.push({ time: rec.time, speed });
   }
 
   // 3. Lap and session totals.
-  const shiftAt = (t: number) => {
-    let s = 0;
-    for (const r of shiftAtRecord) if (r.time !== null && r.time <= t) s = r.shift;
-    return s;
-  };
-  if (shiftMetres !== 0 || touched.some(Boolean)) {
-    for (const sum of parsed.summaries) {
-      if (sum.startTime === null || sum.endTime === null) continue;
-      const startShift = shiftAt(sum.startTime - 1);
-      const endShift = shiftAt(sum.endTime);
-      let totalM: number | null = null;
-      if (sum.totalDistance) {
-        const cm = readSlot(view, sum.totalDistance);
-        if (cm !== null) {
-          totalM = cm / 100 + (endShift - startShift);
-          writeSlot(view, sum.totalDistance, totalM * 100);
-        }
+  const lastRecordTime = parsed.records.reduce((m, r) => (r.time !== null && r.time > m ? r.time : m), 0);
+  for (const sum of parsed.summaries) {
+    if (sum.startTime === null) continue;
+    // Some files leave out a lap's end time; use the next lap's start, or the last record.
+    const next = parsed.summaries.find(
+      (o) => o.kind === sum.kind && o.startTime !== null && o.startTime > sum.startTime!,
+    );
+    const endTime = sum.endTime ?? (next ? next.startTime! - 1 : lastRecordTime);
+    let totalM: number | null = null;
+    if (sum.totalDistance && model) {
+      const cm = readSlot(view, sum.totalDistance);
+      if (cm !== null) {
+        const startShift = model.fixedAt(sum.startTime) - model.originalAt(sum.startTime);
+        const endShift = model.fixedAt(endTime) - model.originalAt(endTime);
+        totalM = Math.max(0, cm / 100 + (endShift - startShift));
+        writeSlot(view, sum.totalDistance, totalM * 100);
       }
-      if (totalM !== null && sum.timerTime) {
-        const avg = totalM / sum.timerTime;
-        if (sum.avgSpeed && readSlot(view, sum.avgSpeed) !== null) writeSlot(view, sum.avgSpeed, avg * 1000);
-        if (sum.enhancedAvgSpeed && readSlot(view, sum.enhancedAvgSpeed) !== null)
-          writeSlot(view, sum.enhancedAvgSpeed, avg * 1000);
-      }
-      const inLap = newSpeeds.filter(
-        (r) => r.time !== null && r.speed !== null && r.time >= sum.startTime! && r.time <= sum.endTime!,
-      );
-      if (inLap.length) {
-        const max = Math.max(...inLap.map((r) => r.speed!));
-        if (sum.maxSpeed && readSlot(view, sum.maxSpeed) !== null) writeSlot(view, sum.maxSpeed, max * 1000);
-        if (sum.enhancedMaxSpeed && readSlot(view, sum.enhancedMaxSpeed) !== null)
-          writeSlot(view, sum.enhancedMaxSpeed, max * 1000);
-      }
+    }
+    if (totalM !== null && sum.timerTime) {
+      const avg = totalM / sum.timerTime;
+      if (sum.avgSpeed && readSlot(view, sum.avgSpeed) !== null) writeSlot(view, sum.avgSpeed, avg * 1000);
+      if (sum.enhancedAvgSpeed && readSlot(view, sum.enhancedAvgSpeed) !== null)
+        writeSlot(view, sum.enhancedAvgSpeed, avg * 1000);
+    }
+    const inLap = newSpeeds.filter(
+      (r) => r.time !== null && r.speed !== null && r.time >= sum.startTime! && r.time <= endTime,
+    );
+    if (inLap.length) {
+      const max = Math.max(...inLap.map((r) => r.speed!));
+      if (sum.maxSpeed && readSlot(view, sum.maxSpeed) !== null) writeSlot(view, sum.maxSpeed, max * 1000);
+      if (sum.enhancedMaxSpeed && readSlot(view, sum.enhancedMaxSpeed) !== null)
+        writeSlot(view, sum.enhancedMaxSpeed, max * 1000);
     }
   }
 
+  return finish(out, view, parsed);
+}
+
+/** Recalculates each FIT segment's checksum. */
+function finish(out: Uint8Array, view: DataView, parsed: ParsedFit): Uint8Array {
   // 4. Checksums.
   for (const seg of parsed.segments) {
     const dataEnd = seg.start + seg.headerSize + seg.dataSize;
