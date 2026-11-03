@@ -6,6 +6,8 @@ worked out from them, so a glitch no longer inflates your distance or max
 speed. Heart rate, cadence, power, temperature, elevation, timestamps and
 every other recorded value are kept exactly as they were.
 
+**Use it here: https://bluehair-co.github.io/strava-fixer/**
+
 ## How it works
 
 1. On strava.com, open your activity, click the "..." menu and choose
@@ -54,6 +56,12 @@ GitHub runs all three on every pull request (see the "Checks" tab).
 - `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.
+
+## Hosting
+
+The app is published on GitHub Pages by `.github/workflows/deploy.yml`.
+Every change merged into `main` goes live a couple of minutes later; you can
+follow it in the repo's **Actions** tab.
 
 ## License
 

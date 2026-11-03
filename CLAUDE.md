@@ -22,6 +22,9 @@ These are David's standing preferences. Follow them in every session.
   subscription since June 2026). Users export the original file from Strava,
   fix it here, then delete and re-upload on strava.com themselves.
 - Stack: Next.js + TypeScript, Leaflet for the map, Vitest for tests.
+- Hosting: GitHub Pages (David wants everything in GitHub, not Vercel).
+  The app is a static export (`output: "export"`); it must keep working with
+  no server. Live at https://bluehair-co.github.io/strava-fixer/
 - The repo is public and licensed CC0; never commit secrets.
 
 ## Checks to run before pushing
