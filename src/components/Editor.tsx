@@ -6,6 +6,7 @@ import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity
 import { clearPositions, countChanged, movePoint, straighten, type TrackPoint } from "@/lib/track";
 import type { Selection } from "./MapView";
 import SelectionPanel from "./SelectionPanel";
+import NextSteps from "./NextSteps";
 import styles from "./Editor.module.css";
 
 // Leaflet needs the browser, so the map is only loaded on the client.
@@ -19,6 +20,7 @@ export default function Editor() {
   const [activity, setActivity] = useState<LoadedActivity | null>(null);
   const [history, setHistory] = useState<TrackPoint[][]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [showNextSteps, setShowNextSteps] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
   const points = history[history.length - 1];
@@ -109,6 +111,7 @@ export default function Editor() {
       text:
         "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.",
     });
+    setShowNextSteps(true);
   };
 
   if (!activity || !points) {
@@ -156,7 +159,7 @@ export default function Editor() {
         <button className={styles.primary} onClick={download} disabled={changed === 0}>
           Download fixed file
         </button>
-        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); }}>Open another file</button>
+        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); }}>Open another file</button>
       </div>
       <p className={styles.status}>
         {points.length} points · {changed} changed
@@ -166,6 +169,7 @@ export default function Editor() {
         range. Drag a point to move it.
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
+      {showNextSteps && <NextSteps onClose={() => setShowNextSteps(false)} />}
       <div className={styles.workspace}>
         <div className={styles.map}>
           <MapView
