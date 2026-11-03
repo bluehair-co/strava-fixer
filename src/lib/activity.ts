@@ -27,6 +27,12 @@ export function fixedFileName(name: string, kind: "fit" | "gpx"): string {
   return `${base}-fixed.${kind}`;
 }
 
+/** The file's bytes, unzipped if it was a .gz. */
+export async function readActivityFile(file: File): Promise<Uint8Array> {
+  const raw = new Uint8Array(await file.arrayBuffer());
+  return isGzip(raw) ? gunzip(raw) : raw;
+}
+
 export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<LoadedActivity> | LoadedActivity {
   if (isGzip(raw)) {
     return gunzip(raw).then((bytes) => loadActivityBytes(fileName, bytes));

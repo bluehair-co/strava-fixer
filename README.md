@@ -31,6 +31,26 @@ every other recorded value are kept exactly as they were.
    after downloading, the app reminds you of the order and has a button that
    opens Strava's upload page.
 
+## Merging a watch and a phone recording
+
+If you recorded the same activity on two devices, say your phone (good GPS)
+and your watch (heart rate, but GPS that started late or never came), the
+**Merge watch + phone** tab turns them into one activity:
+
+1. Export the original file of both activities from Strava.
+2. Choose the phone's file as **recording 1** (only its GPS track is used) and
+   the watch's file as **recording 2** (everything in it is kept: times, laps,
+   heart rate, cadence, power, elevation).
+3. Pick whether to use the phone's GPS for the whole activity, or only where
+   the watch had none. The two are lined up by time.
+4. **Download merged file**, delete both originals on Strava, and upload the
+   merged file.
+
+The same safety check applies: compared with the watch's file, only GPS
+positions, distance and speed may differ. If the watch saved its samples with
+no room for a position at all, the app adds empty latitude/longitude fields
+to them first (this is the one case where the file grows).
+
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
 
@@ -59,6 +79,8 @@ GitHub runs all three on every pull request (see the "Checks" tab).
   every other byte untouched. Distance is adjusted only where you edited:
   untouched stretches keep the watch's own distance.
 - `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
+- `src/lib/merge.ts` lines up two recordings by time and copies the GPS
+  track from one into the other; `src/components/Merge.tsx` is its page.
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.
 

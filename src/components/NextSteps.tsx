@@ -5,21 +5,22 @@ import styles from "./Editor.module.css";
 const STRAVA_UPLOAD = "https://www.strava.com/upload/select";
 
 /** Shown after downloading: how to swap the activity on Strava. */
-export default function NextSteps({ onClose }: { onClose: () => void }) {
+export default function NextSteps({ onClose, merged = false }: { onClose: () => void; merged?: boolean }) {
   return (
     <section className={styles.nextSteps} aria-label="Next steps on Strava">
       <strong>Next: swap the activity on Strava</strong>
       <ol>
         <li>
           <span>
-            <b>1. Delete the original activity on Strava.</b> Copy anything you want to keep first
-            (title, description, photos), because kudos and comments can&rsquo;t be moved.
+            <b>1. Delete the original {merged ? "activities (both of them)" : "activity"} on Strava.</b> Copy
+            anything you want to keep first (title, description, photos), because kudos and comments
+            can&rsquo;t be moved.
           </span>
         </li>
         <li>
           <span>
-            <b>2. Upload the fixed file.</b> Do this after deleting, or Strava will reject it as a
-            duplicate.
+            <b>2. Upload the {merged ? "merged" : "fixed"} file.</b> Do this after deleting, or Strava
+            will reject it as a duplicate.
           </span>
           <a className={styles.linkButton} href={STRAVA_UPLOAD} target="_blank" rel="noopener noreferrer">
             Open Strava upload page
