@@ -195,3 +195,73 @@ export function stepDistances(points: TrackPoint[]): number[] {
 export function trackLength(points: TrackPoint[]): number {
   return stepDistances(points).reduce((a, b) => a + b, 0);
 }
+
+/** A part of the track you edited, with its length before and after. */
+export interface EditedStretch {
+  /** First and last point (indexes in the edited track), both unchanged where possible. */
+  from: number;
+  to: number;
+  /** Time of the first point, if it has one. */
+  time: number | null;
+  /** Length in metres of this part of the GPS track as recorded, and after editing. */
+  before: number;
+  after: number;
+  moved: number;
+  added: number;
+}
+
+/**
+ * Splits your edits into stretches: each runs from the last unchanged point
+ * before an edit to the first unchanged point after it, so its length can be
+ * compared with the same stretch of the recorded track.
+ */
+export function editedStretches(original: TrackPoint[], current: TrackPoint[]): EditedStretch[] {
+  const originals = originalsOf(original, current);
+  // Where each point of `current` sits in `original` (added points: the recorded point before).
+  const originalIndex: number[] = [];
+  let k = -1;
+  originals.forEach((o) => {
+    if (o) k++;
+    originalIndex.push(k);
+  });
+  const changed = current.map((p, i) => {
+    const o = originals[i];
+    return !o || o.lat !== p.lat || o.lon !== p.lon;
+  });
+  const isAnchor = (i: number) => !changed[i] && current[i].lat !== null && current[i].lon !== null;
+
+  const out: EditedStretch[] = [];
+  let i = 0;
+  while (i < current.length) {
+    if (!changed[i]) {
+      i++;
+      continue;
+    }
+    let from = i - 1;
+    while (from >= 0 && !isAnchor(from)) from--;
+    let to = i;
+    while (to < current.length && !isAnchor(to)) to++;
+    from = Math.max(0, from);
+    to = Math.min(current.length - 1, to);
+    let moved = 0;
+    let added = 0;
+    for (let j = from; j <= to; j++) {
+      if (!originals[j]) added++;
+      else if (changed[j]) moved++;
+    }
+    const oFrom = Math.max(0, originalIndex[from]);
+    const oTo = originalIndex[to];
+    out.push({
+      from,
+      to,
+      time: current[from].time,
+      before: trackLength(original.slice(oFrom, oTo + 1)),
+      after: trackLength(current.slice(from, to + 1)),
+      moved,
+      added,
+    });
+    // The anchor that ends this stretch can start the next one.
+    i = to + 1;
+  }
+  return out;
+}

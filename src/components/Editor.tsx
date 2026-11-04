@@ -16,6 +16,7 @@ import {
 import type { Selection } from "./MapView";
 import SelectionPanel from "./SelectionPanel";
 import NextSteps from "./NextSteps";
+import DistanceSummary from "./DistanceSummary";
 import styles from "./Editor.module.css";
 
 // Leaflet needs the browser, so the map is only loaded on the client.
@@ -228,7 +229,7 @@ export default function Editor() {
       <p className={styles.status}>
         {points.length} points · {moved} changed{added > 0 && ` · ${added} added`}
         {distances?.before != null && distances.after != null &&
-          ` · distance ${formatKm(distances.before)}${changed ? ` → ${formatKm(distances.after)}` : ""}`}
+          !changed && ` · distance ${formatKm(distances.before)}`}
         {" · "}
         {addMode
           ? "Click on the map to add a point to the nearest stretch of track. Its time is worked out from how far along the stretch it is. Drag points to move them."
@@ -236,6 +237,16 @@ export default function Editor() {
         {locked && " Recorded points are locked: only points you added can be moved."}
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
+      {changed > 0 && distances?.before != null && distances.after != null && (
+        <DistanceSummary
+          original={activity.points}
+          points={points}
+          before={distances.before}
+          after={distances.after}
+          kind={activity.kind}
+          onSelectStretch={(from, to) => setSelection({ from, to })}
+        />
+      )}
       {showNextSteps && <NextSteps onClose={() => setShowNextSteps(false)} />}
       <div className={styles.workspace}>
         <div className={styles.map}>
