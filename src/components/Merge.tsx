@@ -2,249 +2,299 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
-import { loadActivityBytes, readActivityFile } from "@/lib/activity";
-import { joinActivities, joinedFileName } from "@/lib/join";
-import { mergeActivities, mergedFileName, type MergeMode } from "@/lib/merge";
-import { trackLength, type TrackPoint } from "@/lib/track";
+import { readActivityFile } from "@/lib/activity";
+import { buildCombined, defaultChoices, planCombine, type Choices, type CombineResult } from "@/lib/combine";
+import { CHANNELS, readSource, type Channel, type Source } from "@/lib/sources";
+import { trackLength } from "@/lib/track";
 import NextSteps from "./NextSteps";
+import type { MapTrack } from "./TracksMap";
 import styles from "./Editor.module.css";
 
-const MapView = dynamic(() => import("./MapView"), { ssr: false });
+const TracksMap = dynamic(() => import("./TracksMap"), { ssr: false });
 
-interface Picked {
-  name: string;
-  bytes: Uint8Array;
-  points: TrackPoint[];
-}
+/** One colour per file, easy to tell apart on a map (Strava orange is kept for the result). */
+const COLORS = ["#1a73e8", "#9334e6", "#188038", "#d01884", "#007b83", "#b06000", "#5f6368", "#c5221f"];
+const RESULT_COLOR = "#fc4c02";
+const colorOf = (i: number) => COLORS[i % COLORS.length];
 
-const noop = () => {};
+const SPORTS = [
+  { value: "cycling", label: "Ride" },
+  { value: "running", label: "Run" },
+  { value: "walking", label: "Walk" },
+  { value: "hiking", label: "Hike" },
+];
 
-function FilePicker({
-  title,
-  help,
-  picked,
-  onPick,
-}: {
-  title: string;
-  help: string;
-  picked: Picked | null;
-  onPick: (file: File | undefined) => void;
-}) {
-  return (
-    <label
-      className={`${styles.drop} ${styles.dropSmall}`}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        onPick(e.dataTransfer.files[0]);
-      }}
-    >
-      <strong>{title}</strong>
-      <span className={styles.hint}>{help}</span>
-      {picked ? (
-        <span className={styles.info}>
-          {picked.name} · {picked.points.filter((p) => p.lat !== null).length} GPS points
-        </span>
-      ) : (
-        <span>Choose a .fit or .gpx file, or drop it here</span>
-      )}
-      <input type="file" accept=".fit,.gpx,.gz" onChange={(e) => onPick(e.target.files?.[0])} hidden />
-    </label>
-  );
-}
+const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const day = (t: number) => new Date(t).toLocaleDateString();
 
-type How = "combine" | "join";
-
-/** What the page shows and downloads, whichever way the files are put together. */
-interface Output {
-  kind: "fit" | "gpx";
-  data: Uint8Array;
-  fileName: string;
-  /** Drawn as grey dashes under the result. */
-  original: TrackPoint[];
-  points: TrackPoint[];
-  summary: string;
-  problems: string[];
+/** Splits a list of positions into separate lines wherever there's a long gap. */
+function toParts(points: { lat?: number | null; lon?: number | null; time: number | null }[], maxGapMs: number) {
+  const parts: [number, number][][] = [];
+  let current: [number, number][] = [];
+  let lastTime: number | null = null;
+  for (const p of points) {
+    if (p.lat == null || p.lon == null) continue;
+    if (lastTime !== null && p.time !== null && p.time - lastTime > maxGapMs && current.length) {
+      parts.push(current);
+      current = [];
+    }
+    current.push([p.lat, p.lon]);
+    lastTime = p.time;
+  }
+  if (current.length) parts.push(current);
+  return parts;
 }
 
 export default function Merge() {
-  const [how, setHow] = useState<How>("combine");
-  const [first, setFirst] = useState<Picked | null>(null);
-  const [second, setSecond] = useState<Picked | null>(null);
-  const [mode, setMode] = useState<MergeMode>("replace");
+  const [sources, setSources] = useState<Source[]>([]);
+  const [hidden, setHidden] = useState<Set<Source>>(new Set());
+  const [showResult, setShowResult] = useState(true);
+  const [choices, setChoices] = useState<Choices | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
-  const pick = (set: (p: Picked) => void) => async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      const bytes = await readActivityFile(file);
-      const loaded = await loadActivityBytes(file.name, bytes);
-      set({ name: file.name, bytes, points: loaded.points });
-      setMessage(null);
-      setShowNextSteps(false);
-    } catch (err) {
-      setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) });
-    }
+  const update = (next: Source[]) => {
+    setSources(next);
+    setChoices(next.length ? defaultChoices(next) : null);
+    setShowNextSteps(false);
   };
 
-  // Work out the result whenever both files and the options are chosen.
-  const { output, error } = useMemo((): { output: Output | null; error: string | null } => {
-    if (!first || !second) return { output: null, error: null };
-    try {
-      if (how === "combine") {
-        const r = mergeActivities(second.bytes, first.points, mode);
-        return {
-          error: null,
-          output: {
-            ...r,
-            fileName: mergedFileName(second.name, r.kind),
-            original: first.points,
-            summary:
-              `${r.changed} of ${r.points.length} samples got a new position` +
-              (r.missing > 0 ? ` · ${r.missing} still have none (recording 1 wasn't running then)` : "") +
-              ` · distance ${(trackLength(r.points) / 1000).toFixed(2)} km · Grey dashes: recording 1. Orange: the merged track.`,
-          },
-        };
+  const addFiles = async (files: FileList | null | undefined) => {
+    if (!files?.length) return;
+    const added: Source[] = [];
+    const errors: string[] = [];
+    for (const file of Array.from(files)) {
+      try {
+        added.push(readSource(file.name, await readActivityFile(file)));
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
       }
-      const r = joinActivities(first.bytes, second.bytes);
-      const firstName = (r.firstIndex === 0 ? first : second).name;
-      const gap = r.gapMinutes < 1 ? "less than a minute" : `${Math.round(r.gapMinutes)} min`;
-      return {
-        error: null,
-        output: {
-          ...r,
-          fileName: joinedFileName(firstName, r.kind),
-          original: r.points,
-          summary:
-            `${firstName} comes first · ${gap} between the two parts (shown as a pause) · ` +
-            `distance ${(trackLength(r.points) / 1000).toFixed(2)} km.`,
-        },
-      };
-    } catch (err) {
-      return { output: null, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [first, second, mode, how]);
+    if (added.length) update([...sources, ...added]);
+    setMessage(errors.length ? { kind: "error", text: errors.join(" ") } : null);
+  };
+
+  const remove = (i: number) => update(sources.filter((_, j) => j !== i));
+
+  const { result, error } = useMemo((): { result: CombineResult | null; error: string | null } => {
+    if (!choices || sources.length === 0) return { result: null, error: null };
+    try {
+      const plan = planCombine(sources, choices);
+      if (plan.rows.length === 0) return { result: null, error: "Choose at least one kind of data to keep." };
+      return { result: buildCombined(sources, choices, plan), error: null };
+    } catch (err) {
+      return { result: null, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [sources, choices]);
+
+  const tracks = useMemo((): MapTrack[] => {
+    // The result goes underneath, wide and faint, so the files' own colours show on top of it.
+    const list: MapTrack[] = [];
+    if (result && showResult) {
+      list.push({ parts: toParts(result.points, 60_000), color: RESULT_COLOR, weight: 9, opacity: 0.45, label: "Combined result" });
+    }
+    const files: MapTrack[] = sources
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => !hidden.has(s))
+      .map(({ s, i }) => ({
+        parts: toParts(s.samples, s.maxGapMs),
+        color: colorOf(i),
+        weight: 3,
+        opacity: 0.75,
+        label: s.name,
+      }));
+    return [...list, ...files];
+  }, [sources, hidden, result, showResult]);
 
   const download = () => {
-    if (!output || output.problems.length) return;
-    const blob = new Blob([output.data as BlobPart], {
-      type: output.kind === "fit" ? "application/octet-stream" : "application/gpx+xml",
+    if (!result || result.problems.length) return;
+    const blob = new Blob([result.data as BlobPart], {
+      type: result.kind === "fit" ? "application/octet-stream" : "application/gpx+xml",
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = output.fileName;
+    a.download = result.fileName;
     a.click();
     URL.revokeObjectURL(url);
     setMessage({
       kind: "info",
-      text:
-        how === "combine"
-          ? "Downloaded. The safety check confirmed that the heart rate, cadence, power and every other value from the second file are unchanged; only GPS positions, distance and speed are new."
-          : "Downloaded. The safety check confirmed that every sample of both files is in it unchanged; only the second part's running distance was carried on from the first.",
+      text: "Downloaded. The safety check confirmed that every value in it is exactly what one of your files recorded at that moment.",
     });
     setShowNextSteps(true);
   };
 
-  const switchTo = (next: How) => {
-    setHow(next);
-    setMessage(null);
-    setShowNextSteps(false);
+  const setPick = (c: Channel, i: number | null) => {
+    if (choices) setChoices({ ...choices, pick: { ...choices.pick, [c]: i } });
   };
+
+  // Shared time axis for the coverage bars.
+  const t0 = sources.length ? Math.min(...sources.map((s) => s.start)) : 0;
+  const t1 = sources.length ? Math.max(...sources.map((s) => s.end)) : 1;
+  const bar = (start: number, end: number) => ({
+    left: `${((start - t0) / Math.max(1, t1 - t0)) * 100}%`,
+    width: `${Math.max(0.5, ((end - start) / Math.max(1, t1 - t0)) * 100)}%`,
+  });
+  const channelsPresent = CHANNELS.filter((c) => sources.some((s) => s.channels.includes(c.key)));
+  const fileSport = sources.find((s) => s.sport)?.sport ?? null;
 
   return (
     <div className={styles.merge}>
-      <fieldset className={styles.options}>
-        <legend>What happened?</legend>
-        <label>
-          <input type="radio" checked={how === "combine"} onChange={() => switchTo("combine")} />{" "}
-          <b>Same activity on two devices</b>, at the same time (e.g. phone for GPS, watch for heart rate)
-        </label>
-        <label>
-          <input type="radio" checked={how === "join"} onChange={() => switchTo("join")} />{" "}
-          <b>One after the other</b>: one device ran out of battery and I carried on recording with another
-        </label>
-      </fieldset>
-      <p className={styles.hint}>
-        Export the original file of both activities from Strava (open each activity, click the
-        &ldquo;&hellip;&rdquo; menu, <em>Export Original</em>) and choose them below. Your files never
-        leave your computer.
-      </p>
-      {how === "combine" ? (
-        <div className={styles.pickers}>
-          <FilePicker
-            title="1. Recording with the good GPS"
-            help="Usually your phone. Only its GPS track is used."
-            picked={first}
-            onPick={pick(setFirst)}
-          />
-          <FilePicker
-            title="2. Recording with heart rate, cadence, power…"
-            help="Usually your watch. Everything in it is kept: times, laps, heart rate, cadence, power, elevation."
-            picked={second}
-            onPick={pick(setSecond)}
-          />
-        </div>
-      ) : (
-        <div className={styles.pickers}>
-          <FilePicker
-            title="First recording"
-            help="Either order works: the app puts them in time order."
-            picked={first}
-            onPick={pick(setFirst)}
-          />
-          <FilePicker
-            title="Second recording"
-            help="Both need to be the same kind of file (two .fit or two .gpx)."
-            picked={second}
-            onPick={pick(setSecond)}
-          />
-        </div>
-      )}
-      {how === "combine" && (
-        <fieldset className={styles.options}>
-          <legend>Where should the GPS come from?</legend>
-          <label>
-            <input type="radio" checked={mode === "replace"} onChange={() => setMode("replace")} /> Use recording 1&rsquo;s GPS
-            for the whole activity
-          </label>
-          <label>
-            <input type="radio" checked={mode === "fill"} onChange={() => setMode("fill")} /> Keep recording 2&rsquo;s own
-            GPS, and only fill in the parts where it had none
-          </label>
-        </fieldset>
-      )}
-
-      {message && <p className={styles[message.kind]}>{message.text}</p>}
-      {error && <p className={styles.error}>{error}</p>}
-      {output && output.problems.length > 0 && (
-        <p className={styles.error}>
-          The safety check failed, so the file can&rsquo;t be downloaded: {output.problems.join(" ")}
+      <label
+        className={`${styles.drop} ${styles.dropSmall}`}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          addFiles(e.dataTransfer.files);
+        }}
+      >
+        <strong>{sources.length ? "Add more files" : "Choose the .fit or .gpx files to combine"}</strong>
+        <span>or drop them here (you can pick several at once)</span>
+        <input type="file" accept=".fit,.gpx,.gz" multiple onChange={(e) => addFiles(e.target.files)} hidden />
+      </label>
+      {sources.length === 0 && (
+        <p className={styles.hint}>
+          For example the same ride recorded on your watch and your phone, or two recordings made one after
+          the other. Export the original file of each from Strava (open the activity, click the
+          &ldquo;&hellip;&rdquo; menu, <em>Export Original</em>). Your files never leave your computer.
         </p>
       )}
-      {showNextSteps && <NextSteps merged onClose={() => setShowNextSteps(false)} />}
+      {message && <p className={styles[message.kind]}>{message.text}</p>}
 
-      {output && (
+      {sources.length > 0 && choices && (
         <>
-          <div className={styles.toolbar}>
-            <button className={styles.primary} onClick={download} disabled={output.problems.length > 0}>
-              {how === "combine" ? "Download merged file" : "Download joined file"}
-            </button>
-            <span className={styles.status}>
-              {output.summary} If a few points are still wrong, open the downloaded file in &ldquo;Fix GPS
-              points&rdquo;.
-            </span>
+          <ul className={styles.fileList}>
+            {sources.map((s, i) => (
+              <li key={i}>
+                <input
+                  type="checkbox"
+                  title="Show on the map"
+                  checked={!hidden.has(s)}
+                  onChange={() => {
+                    const next = new Set(hidden);
+                    if (next.has(s)) next.delete(s);
+                    else next.add(s);
+                    setHidden(next);
+                  }}
+                />
+                <span className={styles.swatch} style={{ background: colorOf(i) }} />
+                <span className={styles.fileName}>{s.name}</span>
+                <span className={styles.fileInfo}>
+                  {day(s.start)} {hhmm(s.start)}–{hhmm(s.end)} ·{" "}
+                  {s.channels.map((c) => CHANNELS.find((x) => x.key === c)!.label).join(", ") || "no data"}
+                </span>
+                <button className={styles.removeButton} onClick={() => remove(i)} aria-label={`Remove ${s.name}`}>
+                  Remove
+                </button>
+              </li>
+            ))}
+            {result && (
+              <li>
+                <input type="checkbox" title="Show on the map" checked={showResult} onChange={() => setShowResult(!showResult)} />
+                <span className={styles.swatch} style={{ background: RESULT_COLOR }} />
+                <span className={styles.fileName}>Combined result</span>
+              </li>
+            )}
+          </ul>
+
+          <div className={styles.coverage} aria-label="When each file was recording">
+            {sources.map((s, i) => (
+              <div key={i} className={styles.coverageRow}>
+                <span className={styles.coverageBar} style={{ ...bar(s.start, s.end), background: colorOf(i) }} title={s.name} />
+              </div>
+            ))}
+            <div className={styles.coverageAxis}>
+              <span>{hhmm(t0)}</span>
+              <span>{hhmm(t1)}</span>
+            </div>
           </div>
+
+          <div className={styles.tableWrap}>
+            <table className={styles.choiceTable}>
+              <thead>
+                <tr>
+                  <th>Keep…</th>
+                  {sources.map((s, i) => (
+                    <th key={i} title={s.name}>
+                      <span className={styles.swatch} style={{ background: colorOf(i) }} /> {s.name.length > 18 ? `${s.name.slice(0, 16)}…` : s.name}
+                    </th>
+                  ))}
+                  <th>None</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channelsPresent.map((c) => (
+                  <tr key={c.key}>
+                    <td>{c.label}</td>
+                    {sources.map((s, i) => (
+                      <td key={i}>
+                        {s.channels.includes(c.key) ? (
+                          <input
+                            type="radio"
+                            name={`pick-${c.key}`}
+                            aria-label={`${c.label} from ${s.name}`}
+                            checked={choices.pick[c.key] === i}
+                            onChange={() => setPick(c.key, i)}
+                          />
+                        ) : (
+                          <span className={styles.none}>–</span>
+                        )}
+                      </td>
+                    ))}
+                    <td>
+                      <input
+                        type="radio"
+                        name={`pick-${c.key}`}
+                        aria-label={`No ${c.label.toLowerCase()}`}
+                        checked={choices.pick[c.key] == null}
+                        onChange={() => setPick(c.key, null)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={choices.fill} onChange={() => setChoices({ ...choices, fill: !choices.fill })} />
+            Where the chosen file has no data (for example before it started, or where it lost GPS), use the other files
+          </label>
+          <label className={styles.checkRow}>
+            Sport:{" "}
+            <select
+              value={choices.sport ?? ""}
+              onChange={(e) => setChoices({ ...choices, sport: e.target.value || null })}
+            >
+              <option value="">From the files{fileSport ? ` (${SPORTS.find((x) => x.value === fileSport)?.label ?? fileSport})` : ""}</option>
+              {SPORTS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <span className={styles.hint}>(only used when a new file is built)</span>
+          </label>
+
+          {error && <p className={styles.error}>{error}</p>}
+          {result && result.problems.length > 0 && (
+            <p className={styles.error}>
+              The safety check failed, so the file can&rsquo;t be downloaded: {result.problems.join(" ")}
+            </p>
+          )}
+          {showNextSteps && <NextSteps merged onClose={() => setShowNextSteps(false)} />}
+          {result && (
+            <div className={styles.toolbar}>
+              <button className={styles.primary} onClick={download} disabled={result.problems.length > 0}>
+                Download combined file
+              </button>
+              <span className={styles.status}>
+                {result.summary} Distance {(trackLength(result.points) / 1000).toFixed(2)} km. If a few points are
+                still wrong, open the downloaded file in &ldquo;Fix GPS points&rdquo;.
+              </span>
+            </div>
+          )}
           <div className={styles.mergeMap}>
-            <MapView
-              original={output.original}
-              points={output.points}
-              selection={null}
-              onSelect={noop}
-              onBoxSelect={noop}
-              onMove={noop}
-            />
+            <TracksMap tracks={tracks} fitKey={sources.map((s) => s.name).join("|")} />
           </div>
         </>
       )}

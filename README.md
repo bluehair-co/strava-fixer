@@ -45,37 +45,32 @@ every other recorded value are kept exactly as they were.
    after downloading, the app reminds you of the order and has a button that
    opens Strava's upload page.
 
-## Merging a watch and a phone recording
+## Combining recordings
 
-If you recorded the same activity on two devices, say your phone (good GPS)
-and your watch (heart rate, but GPS that started late or never came), the
-**Merge or join recordings** tab (option *Same activity on two devices*)
-turns them into one activity:
+The **Combine recordings** tab puts several recordings into one activity,
+for example the same ride recorded on your watch (heart rate, but late or no
+GPS) and your phone (good GPS), or a recording that stopped when a battery
+died and a second one that carried on.
 
-1. Export the original file of both activities from Strava.
-2. Choose the phone's file as **recording 1** (only its GPS track is used) and
-   the watch's file as **recording 2** (everything in it is kept: times, laps,
-   heart rate, cadence, power, elevation).
-3. Pick whether to use the phone's GPS for the whole activity, or only where
-   the watch had none. The two are lined up by time.
-4. **Download merged file**, delete both originals on Strava, and upload the
-   merged file.
+1. Export the original file of each activity from Strava and add them all
+   (FIT or GPX, as many as you like).
+2. Every file's track is drawn on the map in its own colour, and coloured
+   bars show when each file was recording. The combined result is drawn
+   underneath in wide orange. Untick a file to hide it.
+3. In the table, pick which file to keep each kind of data from (GPS track,
+   elevation, heart rate, cadence, power, temperature), or **None** to leave
+   it out. With "use the other files" ticked, moments the chosen file didn't
+   record are filled in from the others.
+4. **Download combined file**, delete the originals on Strava, and upload
+   the new one.
 
-The same safety check applies: compared with the watch's file, only GPS
-positions, distance and speed may differ. If the watch saved its samples with
-no room for a position at all, the app adds empty latitude/longitude fields
-to them first (this is the one case where the file grows).
-
-## Joining recordings made one after the other
-
-If one device ran out of battery and you carried on recording with another,
-choose *One after the other* in the same tab and pick both files (two FIT
-files or two GPX files; either order, the app sorts them by time). Every
-sample of both files is kept as recorded; the gap between them shows up as a
-pause. The only value that changes is the second part's running distance,
-which carries on from where the first part stopped (plus the straight line
-between where one ended and the other began). Then delete both originals on
-Strava and upload the joined file.
+Values are never changed, only copied from the file you chose; distance and
+speed are recalculated from the final track. When everything except the GPS
+track comes from one file, that file is kept exactly as it is (laps and all)
+and only its positions change. Otherwise a new file is built, and laps and
+device details from the originals aren't carried over. Either way a safety
+check reads the result back and refuses the download if any value isn't
+exactly what one of your files recorded at that moment.
 
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
@@ -105,9 +100,11 @@ GitHub runs all three on every pull request (see the "Checks" tab).
   every other byte untouched. Distance is adjusted only where you edited:
   untouched stretches keep the watch's own distance.
 - `src/lib/track.ts` has the editing tools (move, straighten, remove GPS).
-- `src/lib/merge.ts` lines up two recordings by time and copies the GPS
-  track from one into the other; `src/lib/join.ts` puts two recordings one
-  after the other. `src/components/Merge.tsx` is the page for both.
+- `src/lib/sources.ts` reads FIT and GPX files for combining;
+  `src/lib/combine.ts` picks each kind of data from the chosen file and writes
+  the result, using `src/lib/merge.ts` (GPS into one file) or
+  `src/lib/join.ts` (one after the other) when they fit.
+  `src/components/Merge.tsx` and `TracksMap.tsx` are the page.
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.
 
