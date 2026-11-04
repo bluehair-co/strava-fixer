@@ -23,6 +23,18 @@ These are David's standing preferences. Follow them in every session.
   elevation etc. is ever made up for them. The safety check allows exactly
   these new samples and nothing more.
 
+- Combining recordings (the "Combine recordings" tab, David's request): the
+  user picks, per kind of data (GPS, elevation, heart rate, cadence, power,
+  temperature), which file it comes from. Values are copied unchanged from
+  that file's own sample at that moment (positions may be interpolated
+  between GPS points); distance and speed are recalculated from the final
+  track. When everything but GPS comes from one file, that file is copied
+  byte for byte except positions (`verifyMergedFit` / `verifyGpx`); two
+  files one after the other are joined (`verifyJoinedFit` / `verifyJoinedGpx`);
+  otherwise a new file is written and `verifyCombined` reads it back and
+  checks every value is one a loaded file recorded at that time. GPX is
+  written whenever a value comes from a GPX file, so decimals aren't rounded.
+
 ## Decisions so far
 - Files only for now: no Strava API (creating an API app needs a paid Strava
   subscription since June 2026). Users export the original file from Strava,

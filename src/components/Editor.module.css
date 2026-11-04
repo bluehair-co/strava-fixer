@@ -278,3 +278,109 @@
   border-radius: 8px;
   overflow: hidden;
 }
+
+.fileList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.fileList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 3px;
+  vertical-align: middle;
+  flex: none;
+}
+
+.fileName {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.fileInfo {
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.removeButton {
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid #c4c4c4;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.coverageRow {
+  position: relative;
+  height: 8px;
+  background: #f1f3f4;
+  border-radius: 4px;
+}
+
+.coverageBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+}
+
+.coverageAxis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.choiceTable {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.choiceTable th,
+.choiceTable td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid #eee;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.choiceTable th:first-child,
+.choiceTable td:first-child {
+  text-align: left;
+}
+
+.none {
+  color: #bbb;
+}
+
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}

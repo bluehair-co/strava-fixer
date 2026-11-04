@@ -194,6 +194,36 @@ export interface MergeResult {
  * taken from `gps`, lined up by time.
  */
 export function mergeActivities(base: Uint8Array, gps: TrackPoint[], mode: MergeMode): MergeResult {
+  return mergePositions(base, (points) => {
+    if (!points.some((p) => p.time !== null)) {
+      throw new Error("The file with the heart rate and other data has no times, so the two can't be lined up.");
+    }
+    const found = positionsAt(gps, points.map((p) => p.time));
+    if (!found.some(Boolean)) {
+      throw new Error("The two recordings don't overlap in time. Are they of the same activity?");
+    }
+    return points.map((p, i) => {
+      const pos = found[i];
+      if (!pos) return undefined;
+      if (mode === "fill" && p.lat !== null && p.lon !== null) return undefined;
+      return pos;
+    });
+  });
+}
+
+/**
+ * For each sample of the base file: a new position, null to remove its
+ * position, or undefined to keep it as it is.
+ */
+export type PositionPicker = (points: TrackPoint[]) => ({ lat: number; lon: number } | null | undefined)[];
+
+/**
+ * Builds one file from `base` (all its sensor data kept) with positions
+ * chosen by `pick`. Removing positions only works for FIT files (a GPX
+ * track point always has one), so a GPX point asked to lose its position
+ * keeps it.
+ */
+export function mergePositions(base: Uint8Array, pick: PositionPicker): MergeResult {
   if (isFit(base)) {
     const expanded = addPositionFields(base);
     const parsed = parseFit(expanded);
@@ -208,14 +238,23 @@ export function mergeActivities(base: Uint8Array, gps: TrackPoint[], mode: Merge
       const point = parsed.records[i].point;
       if (rec.point < 0 && point >= 0 && slotted.has(parsed.points[point].time)) skip[point] = true;
     });
-    const points = takePositions(parsed.points, gps, mode, skip);
+    const picked = pick(parsed.points);
+    const points = parsed.points.map((p, i) => {
+      const pos = picked[i];
+      if (pos === undefined || (skip[i] && pos !== null)) return p;
+      return { ...p, lat: pos === null ? null : pos.lat, lon: pos === null ? null : pos.lon };
+    });
     const data = writeFit(expanded, parsed, points);
     return { kind: "fit", data, points, ...counts(parsed.points, points), problems: verifyMergedFit(base, data) };
   }
   const text = new TextDecoder().decode(base);
   if (isGpx(text)) {
     const parsed = parseGpx(text);
-    const points = takePositions(parsed.points, gps, mode, []);
+    const picked = pick(parsed.points);
+    const points = parsed.points.map((p, i) => {
+      const pos = picked[i];
+      return pos ? { ...p, lat: pos.lat, lon: pos.lon } : p;
+    });
     const merged = writeGpx(text, parsed, points);
     return {
       kind: "gpx",
@@ -226,22 +265,6 @@ export function mergeActivities(base: Uint8Array, gps: TrackPoint[], mode: Merge
     };
   }
   throw new Error("The file with the heart rate and other data must be a .fit or .gpx file.");
-}
-
-function takePositions(points: TrackPoint[], gps: TrackPoint[], mode: MergeMode, skip: boolean[]): TrackPoint[] {
-  if (!points.some((p) => p.time !== null)) {
-    throw new Error("The file with the heart rate and other data has no times, so the two can't be lined up.");
-  }
-  const found = positionsAt(gps, points.map((p) => p.time));
-  if (!found.some(Boolean)) {
-    throw new Error("The two recordings don't overlap in time. Are they of the same activity?");
-  }
-  return points.map((p, i) => {
-    const pos = found[i];
-    if (!pos || skip[i]) return p;
-    if (mode === "fill" && p.lat !== null && p.lon !== null) return p;
-    return { ...p, lat: pos.lat, lon: pos.lon };
-  });
 }
 
 function counts(before: TrackPoint[], after: TrackPoint[]) {

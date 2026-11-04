@@ -17,7 +17,7 @@ export default function App() {
           Fix GPS points
         </button>
         <button role="tab" aria-selected={tab === "merge"} onClick={() => setTab("merge")}>
-          Merge or join recordings
+          Combine recordings
         </button>
       </nav>
       {tab === "fix" ? <Editor /> : <Merge />}
