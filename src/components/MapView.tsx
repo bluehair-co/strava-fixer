@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { TrackPoint } from "@/lib/track";
+import { lineParts, type TrackPoint } from "@/lib/track";
 
 export interface Selection {
   from: number;
@@ -38,16 +38,8 @@ const COLORS = {
 const HIT_RADIUS_PX = 8;
 
 function toLatLngs(points: TrackPoint[]): L.LatLngExpression[][] {
-  // Split the line wherever a point has no position, so gaps show as gaps.
-  const parts: L.LatLngExpression[][] = [[]];
-  for (const p of points) {
-    if (p.lat === null || p.lon === null) {
-      if (parts[parts.length - 1].length) parts.push([]);
-    } else {
-      parts[parts.length - 1].push([p.lat, p.lon]);
-    }
-  }
-  return parts.filter((part) => part.length > 0);
+  // Split the line only where the GPS really had no position, so gaps show as gaps.
+  return lineParts(points);
 }
 
 /**

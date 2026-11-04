@@ -265,3 +265,37 @@ export function editedStretches(original: TrackPoint[], current: TrackPoint[]): 
   }
   return out;
 }
+
+/**
+ * Splits the track into the lines to draw on the map, breaking it only where
+ * the GPS really had no position for a while.
+ *
+ * Some files (like Strava app recordings, and files merged from them) store
+ * heart rate, distance and position as separate samples with the same time,
+ * so most samples have no position of their own. Those don't break the line:
+ * a sample without a position is only a gap if its time falls strictly
+ * between the two positions around it (or it has no time at all).
+ */
+export function lineParts(points: TrackPoint[]): [number, number][][] {
+  const parts: [number, number][][] = [];
+  let current: [number, number][] = [];
+  let lastTime: number | null = null;
+  // Times of position-less samples since the last point with a position.
+  let pending: (number | null)[] = [];
+  for (const p of points) {
+    if (p.lat === null || p.lon === null) {
+      pending.push(p.time);
+      continue;
+    }
+    const gap = pending.some((t) => t === null || ((lastTime === null || t !== lastTime) && t !== p.time));
+    if (gap && current.length) {
+      parts.push(current);
+      current = [];
+    }
+    current.push([p.lat, p.lon]);
+    lastTime = p.time;
+    pending = [];
+  }
+  if (current.length) parts.push(current);
+  return parts;
+}
