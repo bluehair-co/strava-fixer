@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { keptRange, NO_CROP, type Crop } from "@/lib/crop";
 import { lineParts, type TrackPoint } from "@/lib/track";
 
 export interface Selection {
@@ -14,6 +15,8 @@ interface Props {
   original: TrackPoint[];
   points: TrackPoint[];
   selection: Selection | null;
+  /** Points outside the crop are drawn greyed out. */
+  crop?: Crop;
   onSelect: (index: number, extend: boolean) => void;
   /** Called after shift+dragging a box: the first and last point inside it. */
   onBoxSelect: (from: number, to: number) => void;
@@ -32,6 +35,7 @@ const COLORS = {
   point: "#fc4c02",
   selected: "#1a73e8",
   added: "#0b8043",
+  cropped: "#80868b",
 };
 
 /** How close (in screen pixels) a press must be to a point to count as on it. */
@@ -68,7 +72,7 @@ function nearestStretch(map: L.Map, points: TrackPoint[], at: L.Point): number {
   return best;
 }
 
-export default function MapView({ original, points, selection, onSelect, onBoxSelect, onMove, addMode = false, onInsert, locked = false }: Props) {
+export default function MapView({ original, points, selection, crop = NO_CROP, onSelect, onBoxSelect, onMove, addMode = false, onInsert, locked = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef<L.LayerGroup | null>(null);
@@ -175,7 +179,13 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
     layers.clearLayers();
 
     L.polyline(toLatLngs(original), { color: COLORS.original, weight: 3, dashArray: "4 6" }).addTo(layers);
-    const line = L.polyline(toLatLngs(points), { color: COLORS.track, weight: 3 }).addTo(layers);
+    // The parts cropped off are grey; the part that's kept is orange.
+    const [first, last] = keptRange(points, crop) ?? [points.length, points.length - 1];
+    const cut = { color: COLORS.cropped, weight: 3, opacity: 0.6 };
+    if (first > 0) L.polyline(toLatLngs(points.slice(0, first + 1)), cut).addTo(layers);
+    if (last < points.length - 1) L.polyline(toLatLngs(points.slice(Math.max(0, last))), cut).addTo(layers);
+    const kept = (pts: TrackPoint[]) => pts.slice(first, last + 1);
+    const line = L.polyline(toLatLngs(kept(points)), { color: COLORS.track, weight: 3 }).addTo(layers);
 
     const lo = selection ? Math.min(selection.from, selection.to) : -1;
     const hi = selection ? Math.max(selection.from, selection.to) : -1;
@@ -183,16 +193,17 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
     points.forEach((p, i) => {
       if (p.lat === null || p.lon === null) return;
       const selected = i >= lo && i <= hi;
+      const isCut = i < first || i > last;
       const marker = L.circleMarker([p.lat, p.lon], {
-        radius: selected ? 6 : p.added ? 5 : 4,
-        color: selected ? COLORS.selected : p.added ? COLORS.added : COLORS.point,
+        radius: selected ? 6 : p.added ? 5 : isCut ? 3 : 4,
+        color: selected ? COLORS.selected : isCut ? COLORS.cropped : p.added ? COLORS.added : COLORS.point,
         fillColor: "#fff",
         fillOpacity: 1,
         weight: 2,
         bubblingMouseEvents: false,
       }).addTo(layers);
       marker.bindTooltip(
-        `${p.added ? "Added point" : "Point"} ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}${locked && !p.added ? " · locked" : ""}`,
+        `${p.added ? "Added point" : "Point"} ${i + 1}${p.time !== null ? ` · ${new Date(p.time).toLocaleTimeString()}` : ""}${locked && !p.added ? " · locked" : ""}${isCut ? " · cropped off" : ""}`,
         { direction: "top" },
       );
 
@@ -213,7 +224,7 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
           const latlng = map.containerPointToLatLng(here);
           marker.setLatLng(latlng);
           line.setLatLngs(
-            toLatLngs(points.map((q, j) => (j === i ? { ...q, lat: latlng.lat, lon: latlng.lng } : q))),
+            toLatLngs(kept(points.map((q, j) => (j === i ? { ...q, lat: latlng.lat, lon: latlng.lng } : q)))),
           );
         };
         const onMouseUp = (ev: MouseEvent) => {
@@ -231,7 +242,7 @@ export default function MapView({ original, points, selection, onSelect, onBoxSe
         document.addEventListener("mouseup", onMouseUp);
       });
     });
-  }, [original, points, selection, locked]);
+  }, [original, points, selection, locked, crop]);
 
   return <div ref={containerRef} style={{ height: "100%", width: "100%" }} />;
 }

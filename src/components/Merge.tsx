@@ -1,12 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { readActivityFile } from "@/lib/activity";
+import { cropFile, inCrop, isCropped, NO_CROP, type Crop } from "@/lib/crop";
 import { buildCombined, defaultChoices, planCombine, type Choices, type CombineResult } from "@/lib/combine";
 import { CHANNELS, readSource, type Channel, type Source } from "@/lib/sources";
 import { trackLength } from "@/lib/track";
 import NextSteps from "./NextSteps";
+import CropControls from "./CropControls";
 import type { MapTrack } from "./TracksMap";
 import styles from "./Editor.module.css";
 
@@ -52,10 +54,14 @@ export default function Merge() {
   const [choices, setChoices] = useState<Choices | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  // The part of the combined activity to keep.
+  const [crop, setCrop] = useState<Crop>(NO_CROP);
+  const deferredCrop = useDeferredValue(crop);
 
   const update = (next: Source[]) => {
     setSources(next);
     setChoices(next.length ? defaultChoices(next) : null);
+    setCrop(NO_CROP);
     setShowNextSteps(false);
   };
 
@@ -76,7 +82,7 @@ export default function Merge() {
 
   const remove = (i: number) => update(sources.filter((_, j) => j !== i));
 
-  const { result, error } = useMemo((): { result: CombineResult | null; error: string | null } => {
+  const { result: uncropped, error: combineError } = useMemo((): { result: CombineResult | null; error: string | null } => {
     if (!choices || sources.length === 0) return { result: null, error: null };
     try {
       const plan = planCombine(sources, choices);
@@ -86,6 +92,26 @@ export default function Merge() {
       return { result: null, error: err instanceof Error ? err.message : String(err) };
     }
   }, [sources, choices]);
+
+  // Cropping is done on the combined file, and checked against it.
+  const { result, error } = useMemo((): { result: CombineResult | null; error: string | null } => {
+    if (!uncropped || !isCropped(deferredCrop) || uncropped.problems.length) return { result: uncropped, error: combineError };
+    try {
+      const { data, problems } = cropFile(uncropped.data, deferredCrop);
+      return {
+        result: {
+          ...uncropped,
+          data,
+          problems,
+          points: uncropped.points.filter((p) => inCrop(p.time, deferredCrop)),
+          summary: `${uncropped.summary} Then the start and end are cropped as you chose.`,
+        },
+        error: null,
+      };
+    } catch (err) {
+      return { result: null, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [uncropped, combineError, deferredCrop]);
 
   const tracks = useMemo((): MapTrack[] => {
     // The result goes underneath, wide and faint, so the files' own colours show on top of it.
@@ -119,7 +145,9 @@ export default function Merge() {
     URL.revokeObjectURL(url);
     setMessage({
       kind: "info",
-      text: "Downloaded. The safety check confirmed that every value in it is exactly what one of your files recorded at that moment.",
+      text:
+        "Downloaded. The safety check confirmed that every value in it is exactly what one of your files recorded at that moment." +
+        (isCropped(crop) ? " Cropping only removed the samples before the start and after the end." : ""),
     });
     setShowNextSteps(true);
   };
@@ -275,6 +303,7 @@ export default function Merge() {
             <span className={styles.hint}>(only used when a new file is built)</span>
           </label>
 
+          {uncropped && <CropControls times={uncropped.points.map((p) => p.time)} crop={crop} onChange={setCrop} />}
           {error && <p className={styles.error}>{error}</p>}
           {result && result.problems.length > 0 && (
             <p className={styles.error}>
@@ -288,7 +317,8 @@ export default function Merge() {
                 Download combined file
               </button>
               <span className={styles.status}>
-                {result.summary} Distance {(trackLength(result.points) / 1000).toFixed(2)} km. If a few points are
+                {result.summary} Distance {(trackLength(result.points) / 1000).toFixed(2)} km
+                {uncropped && result !== uncropped && ` (${(trackLength(uncropped.points) / 1000).toFixed(2)} km before cropping)`}. If a few points are
                 still wrong, open the downloaded file in &ldquo;Fix GPS points&rdquo;.
               </span>
             </div>

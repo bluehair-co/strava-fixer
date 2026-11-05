@@ -1,8 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useMemo, useState } from "react";
 import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity";
+import { isCropped, keptRange, NO_CROP, type Crop } from "@/lib/crop";
 import {
   clearPositions,
   countChanged,
@@ -17,6 +18,7 @@ import type { Selection } from "./MapView";
 import SelectionPanel from "./SelectionPanel";
 import NextSteps from "./NextSteps";
 import DistanceSummary from "./DistanceSummary";
+import CropControls from "./CropControls";
 import styles from "./Editor.module.css";
 
 // Leaflet needs the browser, so the map is only loaded on the client.
@@ -35,17 +37,21 @@ export default function Editor() {
   // Locked: recorded points can't be moved by mistake; added points still can.
   const [locked, setLocked] = useState(false);
   const [message, setMessage] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  // The part of the activity to keep (everything else is cut off when downloading).
+  const [crop, setCrop] = useState<Crop>(NO_CROP);
+  // Recalculating the distance can take a moment; let the sliders move first.
+  const deferredCrop = useDeferredValue(crop);
 
   const points = history[history.length - 1];
 
   const distances = useMemo(() => {
     if (!activity || !points) return null;
     try {
-      return { before: activity.distance(activity.points), after: activity.distance(points) };
+      return { before: activity.distance(activity.points), after: activity.distance(points, deferredCrop) };
     } catch {
       return null;
     }
-  }, [activity, points]);
+  }, [activity, points, deferredCrop]);
 
   const openFile = async (file: File | undefined) => {
     if (!file) return;
@@ -54,6 +60,7 @@ export default function Editor() {
       setActivity(loaded);
       setHistory([loaded.points]);
       setSelection(null);
+      setCrop(NO_CROP);
       setMessage(null);
     } catch (err) {
       setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) });
@@ -129,9 +136,30 @@ export default function Editor() {
     setSelection(null);
   };
 
+  // Crop at the selected points: start at the first one, or end at the last one.
+  const cropAt = (side: "start" | "end") => {
+    const time = points[side === "start" ? lo : hi]?.time ?? null;
+    if (time === null) return;
+    const next = { ...crop, [side]: time };
+    if (next.start !== null && next.end !== null && next.end <= next.start) {
+      setMessage({ kind: "error", text: "The end of the activity has to come after its start." });
+      return;
+    }
+    setCrop(next);
+    setSelection(null);
+    setMessage(null);
+  };
+
   const download = () => {
     if (!activity) return;
-    const { data, problems } = activity.build(points);
+    let built: { data: Uint8Array; problems: string[] };
+    try {
+      built = activity.build(points, crop);
+    } catch (err) {
+      setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    const { data, problems } = built;
     if (problems.length) {
       setMessage({
         kind: "error",
@@ -151,9 +179,12 @@ export default function Editor() {
     setMessage({
       kind: "info",
       text:
-        points.some((p) => p.added)
+        (points.some((p) => p.added)
           ? "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed, and that the points you added hold only a time and a position."
-          : "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.",
+          : "Downloaded. The safety check confirmed that only GPS positions, and the distance and speed calculated from them, changed.") +
+        (isCropped(crop)
+          ? " It also confirmed that cropping only removed the samples before the start and after the end, and that the samples kept are as they were apart from their distance."
+          : ""),
     });
     setShowNextSteps(true);
   };
@@ -189,7 +220,9 @@ export default function Editor() {
   }
 
   const { moved, added } = countChanged(activity.points, points);
-  const changed = moved + added;
+  const cropped = isCropped(crop);
+  const changed = moved + added + (cropped ? 1 : 0);
+  const kept = keptRange(points, crop);
 
   return (
     <div className={styles.editor}>
@@ -198,7 +231,7 @@ export default function Editor() {
         <button onClick={() => setHistory((h) => h.slice(0, -1))} disabled={history.length < 2}>
           Undo
         </button>
-        <button onClick={() => { setHistory([activity.points]); setSelection(null); }} disabled={history.length < 2}>
+        <button onClick={() => { setHistory([activity.points]); setSelection(null); setCrop(NO_CROP); }} disabled={history.length < 2 && !cropped}>
           Reset
         </button>
         <button
@@ -224,10 +257,11 @@ export default function Editor() {
         <button className={styles.primary} onClick={download} disabled={changed === 0}>
           Download fixed file
         </button>
-        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); setLocked(false); }}>Open another file</button>
+        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); setLocked(false); setCrop(NO_CROP); }}>Open another file</button>
       </div>
       <p className={styles.status}>
         {points.length} points · {moved} changed{added > 0 && ` · ${added} added`}
+        {cropped && kept && ` · keeping points ${kept[0] + 1}–${kept[1] + 1}`}
         {distances?.before != null && distances.after != null &&
           !changed && ` · distance ${formatKm(distances.before)}`}
         {" · "}
@@ -237,10 +271,12 @@ export default function Editor() {
         {locked && " Recorded points are locked: only points you added can be moved."}
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
+      <CropControls times={points.map((p) => p.time)} crop={crop} onChange={setCrop} />
       {changed > 0 && distances?.before != null && distances.after != null && (
         <DistanceSummary
           original={activity.points}
           points={points}
+          crop={deferredCrop}
           before={distances.before}
           after={distances.after}
           kind={activity.kind}
@@ -254,6 +290,7 @@ export default function Editor() {
             original={activity.points}
             points={points}
             selection={selection}
+            crop={crop}
             onSelect={onSelect}
             onBoxSelect={onBoxSelect}
             onMove={onMove}
@@ -274,6 +311,7 @@ export default function Editor() {
             onStraighten={doStraighten}
             onRemoveGps={doRemove}
             onDeleteAdded={doDeleteAdded}
+            onCrop={cropAt}
             onClear={() => setSelection(null)}
           />
         )}

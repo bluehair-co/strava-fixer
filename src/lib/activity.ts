@@ -1,3 +1,4 @@
+import { cropFile, inCrop, isCropped, NO_CROP, type Crop } from "./crop";
 import { isFit, parseFit, reportedDistance, verifyFit, writeFit } from "./fit";
 import { isGpx, parseGpx, verifyGpx, writeGpx } from "./gpx";
 import { trackLength, type TrackPoint } from "./track";
@@ -9,10 +10,11 @@ export interface LoadedActivity {
   /**
    * Builds the fixed file and checks nothing but positions (and distance/speed)
    * changed, and that added points became new samples with only a time and a position.
+   * With a crop, the fixed file is then cropped and checked again (see `cropFile`).
    */
-  build(points: TrackPoint[]): { data: Uint8Array; problems: string[] };
-  /** Total distance in metres for these points, as the fixed file would report it. */
-  distance(points: TrackPoint[]): number | null;
+  build(points: TrackPoint[], crop?: Crop): { data: Uint8Array; problems: string[] };
+  /** Total distance in metres for these points, as the fixed (and cropped) file would report it. */
+  distance(points: TrackPoint[], crop?: Crop): number | null;
 }
 
 function isGzip(bytes: Uint8Array): boolean {
@@ -36,6 +38,12 @@ export async function readActivityFile(file: File): Promise<Uint8Array> {
   return isGzip(raw) ? gunzip(raw) : raw;
 }
 
+/** Crops a built file, if asked to and it passed its own safety check. */
+function withCrop(built: { data: Uint8Array; problems: string[] }, crop: Crop) {
+  if (!isCropped(crop) || built.problems.length) return built;
+  return cropFile(built.data, crop);
+}
+
 export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<LoadedActivity> | LoadedActivity {
   if (isGzip(raw)) {
     return gunzip(raw).then((bytes) => loadActivityBytes(fileName, bytes));
@@ -46,17 +54,18 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
       kind: "fit",
       fileName,
       points: parsed.points,
-      build(points) {
+      build(points, crop = NO_CROP) {
         const data = writeFit(raw, parsed, points);
         const added = points.filter((p) => p.added).length;
-        return { data, problems: verifyFit(raw, data, parsed, added) };
+        return withCrop({ data, problems: verifyFit(raw, data, parsed, added) }, crop);
       },
-      distance(points) {
-        const data = writeFit(raw, parsed, points);
-        // Added points shift everything in the file, so read it again.
-        const reported = reportedDistance(data, points.some((p) => p.added) ? parseFit(data) : parsed);
+      distance(points, crop = NO_CROP) {
+        let data = writeFit(raw, parsed, points);
+        if (isCropped(crop)) data = cropFile(data, crop).data;
+        // Added points and cropping shift everything in the file, so read it again.
+        const reported = reportedDistance(data, points.some((p) => p.added) || isCropped(crop) ? parseFit(data) : parsed);
         // Falls back to the GPS track length if the file stores no distance.
-        return reported ?? trackLength(points);
+        return reported ?? trackLength(points.filter((p) => inCrop(p.time, crop)));
       },
     };
   }
@@ -67,12 +76,12 @@ export function loadActivityBytes(fileName: string, raw: Uint8Array): Promise<Lo
       kind: "gpx",
       fileName,
       points: parsed.points,
-      build(points) {
+      build(points, crop = NO_CROP) {
         const fixed = writeGpx(text, parsed, points);
-        return { data: new TextEncoder().encode(fixed), problems: verifyGpx(text, fixed, parsed, points) };
+        return withCrop({ data: new TextEncoder().encode(fixed), problems: verifyGpx(text, fixed, parsed, points) }, crop);
       },
       // GPX files don't store distance; Strava measures it from the track.
-      distance: trackLength,
+      distance: (points, crop = NO_CROP) => trackLength(points.filter((p) => inCrop(p.time, crop))),
     };
   }
   throw new Error("Please choose a .fit or .gpx file (or a .gz of one).");

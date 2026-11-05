@@ -37,6 +37,13 @@ every other recorded value are kept exactly as they were.
      can't move them by mistake (you can still click to select them). Points
      you added can still be dragged, and **Straighten** only lines up added
      points. Click it again to unlock.
+   - **Crop**: drag the Start and End sliders above the map (or select a
+     point and click **✂ Start here** / **✂ End here**) to cut off the
+     beginning or end, e.g. if you forgot to stop recording. The cut-off
+     part turns grey on the map, and the distance overview shows how much
+     each end removed. Cropping removes whole samples; the ones kept stay
+     as recorded, with distance counted from the new start. **Don't crop**
+     undoes it.
    - **Undo** and **Reset** take changes back.
 3. **Download fixed file.** The new total distance is shown above the map.
    Before downloading, the app checks that nothing but GPS positions,
@@ -61,7 +68,9 @@ died and a second one that carried on.
    elevation, heart rate, cadence, power, temperature), or **None** to leave
    it out. With "use the other files" ticked, moments the chosen file didn't
    record are filled in from the others.
-4. **Download combined file**, delete the originals on Strava, and upload
+4. Optionally **crop** the result with the Start and End sliders to cut
+   off the beginning or end.
+5. **Download combined file**, delete the originals on Strava, and upload
    the new one.
 
 Values are never changed, only copied from the file you chose; distance and
