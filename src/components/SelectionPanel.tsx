@@ -15,6 +15,8 @@ interface Props {
   onStraighten: () => void;
   onRemoveGps: () => void;
   onDeleteAdded: () => void;
+  /** Crop the activity so it starts at the first selected point, or ends at the last one. */
+  onCrop: (side: "start" | "end") => void;
   onClear: () => void;
 }
 
@@ -34,6 +36,7 @@ export default function SelectionPanel({
   onStraighten,
   onRemoveGps,
   onDeleteAdded,
+  onCrop,
   onClear,
 }: Props) {
   const count = to - from + 1;
@@ -99,6 +102,22 @@ export default function SelectionPanel({
           </button>
         )}
         <button onClick={onClear}>Clear selection</button>
+      </div>
+      <div className={styles.panelButtons}>
+        <button
+          onClick={() => onCrop("start")}
+          disabled={points[from].time === null}
+          title="Cut off everything recorded before the first selected point"
+        >
+          ✂ Start here
+        </button>
+        <button
+          onClick={() => onCrop("end")}
+          disabled={points[to].time === null}
+          title="Cut off everything recorded after the last selected point"
+        >
+          ✂ End here
+        </button>
       </div>
       {count < 3 && (
         <p className={styles.hint}>

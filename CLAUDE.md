@@ -35,6 +35,17 @@ These are David's standing preferences. Follow them in every session.
   checks every value is one a loaded file recorded at that time. GPX is
   written whenever a value comes from a GPX file, so decimals aren't rounded.
 
+- Cropping (David's request, both tabs): cutting off the start and/or end
+  removes whole samples (FIT records, GPX track points) recorded before the
+  new start or after the new end, and FIT laps lying wholly in the cut-off
+  part. Kept samples stay exactly as recorded except their running
+  distance, which counts from the new start. FIT lap/session start time,
+  end time, elapsed/timer time, lap count, distance and speed are updated
+  to describe the kept part (never other summary values like heart rate).
+  Cropping runs on the finished file, after its own safety check, and
+  `verifyCroppedFit` / `verifyCroppedGpx` (in `src/lib/crop.ts`) check the
+  result against that file.
+
 ## Decisions so far
 - Files only for now: no Strava API (creating an API app needs a paid Strava
   subscription since June 2026). Users export the original file from Strava,
