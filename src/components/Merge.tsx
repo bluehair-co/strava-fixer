@@ -47,7 +47,7 @@ function toParts(points: { lat?: number | null; lon?: number | null; time: numbe
   return parts;
 }
 
-export default function Merge() {
+export default function Merge({ onSendToFixer }: { onSendToFixer?: (fileName: string, data: Uint8Array) => void }) {
   const [sources, setSources] = useState<Source[]>([]);
   const [hidden, setHidden] = useState<Set<Source>>(new Set());
   const [showResult, setShowResult] = useState(true);
@@ -150,6 +150,14 @@ export default function Merge() {
         (isCropped(crop) ? " Cropping only removed the samples before the start and after the end." : ""),
     });
     setShowNextSteps(true);
+  };
+
+  // Opens the combined file in "Fix GPS points" instead of downloading it.
+  const sendToFixer = () => {
+    if (!result || result.problems.length || !onSendToFixer) return;
+    onSendToFixer(result.fileName, result.data);
+    setShowNextSteps(false);
+    setMessage(null);
   };
 
   const setPick = (c: Channel, i: number | null) => {
@@ -316,10 +324,19 @@ export default function Merge() {
               <button className={styles.primary} onClick={download} disabled={result.problems.length > 0}>
                 Download combined file
               </button>
+              {onSendToFixer && (
+                <button
+                  onClick={sendToFixer}
+                  disabled={result.problems.length > 0}
+                  title="Open the combined file in the Fix GPS points tab, to move points before downloading"
+                >
+                  Fix GPS points first
+                </button>
+              )}
               <span className={styles.status}>
                 {result.summary} Distance {(trackLength(result.points) / 1000).toFixed(2)} km
                 {uncropped && result !== uncropped && ` (${(trackLength(uncropped.points) / 1000).toFixed(2)} km before cropping)`}. If a few points are
-                still wrong, open the downloaded file in &ldquo;Fix GPS points&rdquo;.
+                still wrong, choose &ldquo;Fix GPS points first&rdquo; to correct them before downloading.
               </span>
             </div>
           )}

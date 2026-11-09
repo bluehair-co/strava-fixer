@@ -1,8 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useDeferredValue, useMemo, useState } from "react";
-import { fixedFileName, loadActivity, type LoadedActivity } from "@/lib/activity";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { fixedFileName, loadActivity, loadActivityBytes, type LoadedActivity } from "@/lib/activity";
 import { isCropped, keptRange, NO_CROP, type Crop } from "@/lib/crop";
 import {
   clearPositions,
@@ -28,8 +28,17 @@ function formatKm(metres: number): string {
   return `${(metres / 1000).toFixed(2)} km`;
 }
 
-export default function Editor() {
+/** A file handed over from another tab (a new `id` each time it's sent). */
+export interface IncomingFile {
+  fileName: string;
+  data: Uint8Array;
+  id: number;
+}
+
+export default function Editor({ incoming = null }: { incoming?: IncomingFile | null }) {
   const [activity, setActivity] = useState<LoadedActivity | null>(null);
+  // True when the open file was made in "Combine recordings" (it isn't on Strava yet).
+  const [fromCombine, setFromCombine] = useState(false);
   const [history, setHistory] = useState<TrackPoint[][]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
@@ -53,19 +62,43 @@ export default function Editor() {
     }
   }, [activity, points, deferredCrop]);
 
+  const show = (loaded: LoadedActivity, combined: boolean) => {
+    setActivity(loaded);
+    setFromCombine(combined);
+    setHistory([loaded.points]);
+    setSelection(null);
+    setCrop(NO_CROP);
+    setShowNextSteps(false);
+    setMessage(
+      combined
+        ? {
+            kind: "info",
+            text: "This is your combined file, which already passed its safety check. Fix any GPS points you need, then download it.",
+          }
+        : null,
+    );
+  };
+
   const openFile = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const loaded = await loadActivity(file);
-      setActivity(loaded);
-      setHistory([loaded.points]);
-      setSelection(null);
-      setCrop(NO_CROP);
-      setMessage(null);
+      show(await loadActivity(file), false);
     } catch (err) {
       setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   };
+
+  // A combined file sent over from "Combine recordings" replaces whatever is open.
+  useEffect(() => {
+    if (!incoming) return;
+    let cancelled = false;
+    Promise.resolve(loadActivityBytes(incoming.fileName, incoming.data))
+      .then((loaded) => !cancelled && show(loaded, true))
+      .catch((err) => !cancelled && setMessage({ kind: "error", text: err instanceof Error ? err.message : String(err) }));
+    return () => {
+      cancelled = true;
+    };
+  }, [incoming]);
 
   // Every edit also updates the times of added points (see `retime`).
   const apply = useCallback((next: TrackPoint[]) => setHistory((h) => [...h, retime(next)]), []);
@@ -173,7 +206,7 @@ export default function Editor() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = fixedFileName(activity.fileName, activity.kind);
+    a.download = fromCombine && points === activity.points && !isCropped(crop) ? activity.fileName : fixedFileName(activity.fileName, activity.kind);
     a.click();
     URL.revokeObjectURL(url);
     setMessage({
@@ -254,10 +287,10 @@ export default function Editor() {
         >
           {locked ? "🔒 Recorded points locked" : "🔓 Lock recorded points"}
         </button>
-        <button className={styles.primary} onClick={download} disabled={changed === 0}>
-          Download fixed file
+        <button className={styles.primary} onClick={download} disabled={changed === 0 && !fromCombine}>
+          {fromCombine ? "Download combined file" : "Download fixed file"}
         </button>
-        <button onClick={() => { setActivity(null); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); setLocked(false); setCrop(NO_CROP); }}>Open another file</button>
+        <button onClick={() => { setActivity(null); setFromCombine(false); setHistory([]); setMessage(null); setShowNextSteps(false); setAddMode(false); setLocked(false); setCrop(NO_CROP); }}>Open another file</button>
       </div>
       <p className={styles.status}>
         {points.length} points · {moved} changed{added > 0 && ` · ${added} added`}
@@ -283,7 +316,7 @@ export default function Editor() {
           onSelectStretch={(from, to) => setSelection({ from, to })}
         />
       )}
-      {showNextSteps && <NextSteps onClose={() => setShowNextSteps(false)} />}
+      {showNextSteps && <NextSteps merged={fromCombine} onClose={() => setShowNextSteps(false)} />}
       <div className={styles.workspace}>
         <div className={styles.map}>
           <MapView

@@ -164,7 +164,12 @@ export default function MapView({ original, points, selection, crop = NO_CROP, o
       if (after >= 0) callbacks.current.onInsert?.(after, e.latlng.lat, e.latlng.lng);
     });
 
+    // The map may start in a hidden tab; redraw it when it becomes visible.
+    const resize = new ResizeObserver(() => map.invalidateSize());
+    resize.observe(container);
+
     return () => {
+      resize.disconnect();
       container.removeEventListener("mousedown", onPress, true);
       map.remove();
       mapRef.current = null;

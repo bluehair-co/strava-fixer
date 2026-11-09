@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Encoder, Profile } from "@garmin/fitsdk";
 import { buildCombined, defaultChoices, planCombine, verifyCombined, type Choices } from "./combine";
 import { readSource, type Source } from "./sources";
+import { loadActivityBytes } from "./activity";
+import { movePoint } from "./track";
 
 const toSemi = (deg: number) => Math.round((deg * 2 ** 31) / 180);
 const START = new Date("2026-10-01T08:00:00Z").getTime();
@@ -136,5 +138,24 @@ describe("combining files", () => {
     expect(verifyCombined(sources, choices, tampered, 60).length).toBeGreaterThan(0);
     const noHeartRate = { ...choices, pick: { ...choices.pick, heartRate: null } };
     expect(verifyCombined(sources, noHeartRate, result.data, 60)).toEqual(["The new file has heart rate, which you turned off."]);
+  });
+});
+
+describe("fixing GPS in a combined file", () => {
+  it("opens the combined file in the fixer and lets a point be moved, keeping every other value", async () => {
+    const sources = load(["watch.fit", watch()], ["phone.fit", phone()]);
+    const { result } = combined(sources, defaultChoices(sources));
+    expect(result.problems).toEqual([]);
+    const activity = await loadActivityBytes(result.fileName, result.data);
+    expect(activity.points.length).toBeGreaterThan(0);
+    const unchanged = activity.build(activity.points);
+    expect(unchanged.problems).toEqual([]);
+    const i = Math.floor(activity.points.length / 2);
+    const p = activity.points[i];
+    const moved = movePoint(activity.points, i, p.lat! + 0.0001, p.lon!);
+    const fixed = activity.build(moved);
+    expect(fixed.problems).toEqual([]);
+    const reread = await loadActivityBytes(result.fileName, fixed.data);
+    expect(reread.points[i].lat).toBeCloseTo(p.lat! + 0.0001, 6);
   });
 });
