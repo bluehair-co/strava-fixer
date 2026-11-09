@@ -34,7 +34,11 @@ export default function TracksMap({ tracks, fitKey }: { tracks: MapTrack[]; fitK
     map.setView([0, 0], 2);
     mapRef.current = map;
     layersRef.current = L.layerGroup().addTo(map);
+    // The map stays in the page while another tab is shown; redraw it when it's visible again.
+    const resize = new ResizeObserver(() => map.invalidateSize());
+    resize.observe(containerRef.current);
     return () => {
+      resize.disconnect();
       map.remove();
       mapRef.current = null;
     };
