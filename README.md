@@ -121,6 +121,13 @@ without creating duplicates.
    and sport changes are remembered in this browser; under "Your marks" you
    can save them to a file as a backup, or load them in another browser.
 
+After clicking an activity, the **↑** and **↓** keys move to the previous or
+next one in the list. Partial matches can be compared **side by side** (what's
+in your file next to what's on Strava, with the differences highlighted).
+Activities not worth exporting can be **ignored**: they're hidden from the
+list, and a folder's "show N ignored" link brings them back into view so you
+can put them back.
+
 Everything happens in your browser; no file is uploaded anywhere.
 
 ## Running it on your computer

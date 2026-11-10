@@ -18,7 +18,7 @@ import styles from "./Library.module.css";
 const TracksMap = dynamic(() => import("./TracksMap"), { ssr: false });
 
 type Status = "new" | "partial" | "instrava" | "added" | "unknown";
-type Filter = "all" | Status;
+type Filter = "all" | Status | "ignored";
 
 const STATUS_LABELS: Record<Status, string> = {
   new: "Not in Strava",
@@ -90,6 +90,9 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
   const [busy, setBusy] = useState(false);
   const [full, setFull] = useState<{ key: string; activity: Activity } | null>(null);
   const [hiddenOnMap, setHiddenOnMap] = useState<Set<string>>(new Set());
+  // Folders whose ignored activities are shown (greyed out) so they can be put back.
+  const [showIgnoredIn, setShowIgnoredIn] = useState<Set<string>>(new Set());
+  const rootRef = useRef<HTMLDivElement>(null);
   const scanId = useRef(0);
   const stravaJob = useRef<{ cancelled: boolean } | null>(null);
 
@@ -210,11 +213,13 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
     [marks.added, strava, stravaMatches],
   );
 
+  const isIgnored = useCallback((i: Item) => !!marks.ignored[i.key], [marks.ignored]);
+
   const counts = useMemo(() => {
-    const c: Record<Status, number> = { new: 0, partial: 0, instrava: 0, added: 0, unknown: 0 };
-    for (const i of activities) c[statusOf(i)]++;
+    const c: Record<Status | "ignored", number> = { new: 0, partial: 0, instrava: 0, added: 0, unknown: 0, ignored: 0 };
+    for (const i of activities) c[isIgnored(i) ? "ignored" : statusOf(i)]++;
     return c;
-  }, [activities, statusOf]);
+  }, [activities, statusOf, isIgnored]);
 
   /* ---------- Filtering and the tree ---------- */
 
@@ -223,13 +228,64 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
     const q = search.trim().toLowerCase();
     return items.filter((i) => {
       if (i.kind !== "activity") return showOther && !filtering;
-      if (filter !== "all" && statusOf(i) !== filter) return false;
+      if (filter === "ignored") {
+        if (!isIgnored(i)) return false;
+      } else if (filter !== "all" && (isIgnored(i) || statusOf(i) !== filter)) return false;
       if (q && !`${i.path} ${i.title ?? ""} ${sportLabel(sportOf(i))} ${fmtDate(i.start)}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [items, filter, search, showOther, filtering, statusOf, sportOf]);
+  }, [items, filter, search, showOther, filtering, statusOf, sportOf, isIgnored]);
   const tree = useMemo(() => buildTree(visible), [visible]);
   const otherCount = items.length - activities.length;
+
+  /** Whether ignored activities are shown in this folder (or a folder around it). */
+  const ignoredShownIn = useCallback(
+    (folderPath: string) => {
+      for (let p = folderPath; ; p = p.slice(0, p.lastIndexOf("/"))) {
+        if (showIgnoredIn.has(p)) return true;
+        if (!p.includes("/")) return false;
+      }
+    },
+    [showIgnoredIn],
+  );
+  const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+  const rowShown = useCallback(
+    (i: Item, folderPath: string) => i.kind !== "activity" || !isIgnored(i) || filter === "ignored" || ignoredShownIn(folderPath),
+    [isIgnored, filter, ignoredShownIn],
+  );
+
+  // The activities in the order they're listed, for moving with the arrow keys.
+  const order = useMemo(() => {
+    const keys: string[] = [];
+    const walk = (f: Folder) => {
+      for (const sub of f.folders) if (filtering || open.has(sub.path)) walk(sub);
+      for (const i of f.items) if (i.kind === "activity" && rowShown(i, f.path)) keys.push(i.key);
+    };
+    walk(tree);
+    return keys;
+  }, [tree, filtering, open, rowShown]);
+
+  // ↑ and ↓ move to the previous or next activity in the list.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!rootRef.current || rootRef.current.offsetParent === null) return; // another tab is shown
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input:not([type=checkbox]), select, textarea, [contenteditable=true], .leaflet-container")) return;
+      if (!order.length) return;
+      e.preventDefault();
+      const at = selected ? order.indexOf(selected) : -1;
+      const next = e.key === "ArrowDown" ? (at < 0 ? 0 : Math.min(order.length - 1, at + 1)) : at < 0 ? order.length - 1 : Math.max(0, at - 1);
+      setSelected(order[next]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [order, selected]);
+
+  // Keep the selected activity in view in the list.
+  useEffect(() => {
+    if (selected) rootRef.current?.querySelector(`[data-key="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
 
   const sel = selected ? (byKey.get(selected) ?? null) : null;
 
@@ -268,6 +324,27 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
       }
       return { ...m, added: next };
     });
+
+  const setIgnored = (keys: string[], ignored: boolean) => {
+    setMarks((m) => {
+      const next = { ...m.ignored };
+      const now = new Date().toISOString();
+      for (const k of keys) {
+        if (ignored) next[k] = next[k] ?? now;
+        else delete next[k];
+      }
+      return { ...m, ignored: next };
+    });
+    // Ignored activities can't stay ticked for exporting.
+    if (ignored) toggle(keys, false);
+    // If the open activity is now hidden, move on to the next one in the list.
+    const current = selected ? byKey.get(selected) : undefined;
+    if (ignored && current && keys.includes(current.key) && filter !== "ignored" && !ignoredShownIn(folderOf(current.path))) {
+      const at = order.indexOf(current.key);
+      const rest = order.filter((k) => !keys.includes(k));
+      setSelected(order.slice(at + 1).find((k) => !keys.includes(k)) ?? rest[rest.length - 1] ?? null);
+    }
+  };
 
   const saveMarksFile = () => download("activity-library-marks.json", new TextEncoder().encode(JSON.stringify(marks, null, 2)), "application/json");
   const loadMarksFile = async (file: File | undefined) => {
@@ -385,9 +462,15 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
       );
     const status = statusOf(i);
     const sport = sportOf(i);
+    const ignored = isIgnored(i);
     return (
-      <li key={i.key} className={`${styles.row} ${selected === i.key ? styles.rowSelected : ""}`} onClick={() => setSelected(i.key)}>
-        <input type="checkbox" checked={checked.has(i.key)} onClick={(e) => e.stopPropagation()} onChange={(e) => toggle([i.key], e.target.checked)} aria-label={`Select ${name}`} />
+      <li
+        key={i.key}
+        data-key={i.key}
+        className={`${styles.row} ${selected === i.key ? styles.rowSelected : ""} ${ignored ? styles.rowIgnored : ""}`}
+        onClick={() => setSelected(i.key)}
+      >
+        <input type="checkbox" checked={checked.has(i.key)} disabled={ignored} onClick={(e) => e.stopPropagation()} onChange={(e) => toggle([i.key], e.target.checked)} aria-label={`Select ${name}`} />
         <span className={styles.rowMain}>
           <span className={styles.rowName}>{name}</span>
           <span className={styles.rowInfo}>
@@ -408,14 +491,29 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
             <span className={styles.badge}>Summary</span>
           )}
         </span>
-        <span className={`${styles.status} ${styles[`status_${status}`]}`}>{STATUS_LABELS[status]}</span>
+        {ignored ? (
+          <button
+            className={styles.putBack}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIgnored([i.key], false);
+            }}
+          >
+            Ignored · put back
+          </button>
+        ) : (
+          <span className={`${styles.status} ${styles[`status_${status}`]}`}>{STATUS_LABELS[status]}</span>
+        )}
       </li>
     );
   };
 
   const renderFolder = (f: Folder, depth: number): React.ReactNode => {
     const isOpen = filtering || open.has(f.path);
-    const acts = allItems(f).filter((i) => i.kind === "activity");
+    const all = allItems(f).filter((i) => i.kind === "activity");
+    const acts = all.filter((i) => !isIgnored(i));
+    const ignoredHere = all.length - acts.length;
+    const showing = showIgnoredIn.has(f.path);
     const allChecked = acts.length > 0 && acts.every((i) => checked.has(i.key));
     return (
       <li key={f.path} className={styles.folder}>
@@ -436,6 +534,21 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
             <span className={styles.caret}>{isOpen ? "▾" : "▸"}</span> {f.name}
             <span className={styles.muted}> ({acts.length.toLocaleString()})</span>
           </button>
+          {ignoredHere > 0 && filter !== "ignored" && !(f.path.includes("/") && ignoredShownIn(folderOf(f.path))) && (
+            <button
+              className={styles.inlineButton}
+              onClick={() =>
+                setShowIgnoredIn((s) => {
+                  const next = new Set(s);
+                  if (showing) next.delete(f.path);
+                  else next.add(f.path);
+                  return next;
+                })
+              }
+            >
+              {showing ? `hide ${ignoredHere} ignored` : `show ${ignoredHere} ignored`}
+            </button>
+          )}
         </div>
         {isOpen && renderList(f, depth + 1)}
       </li>
@@ -445,12 +558,12 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
   const renderList = (f: Folder, depth: number) => (
     <ul className={styles.list}>
       {f.folders.map((sub) => renderFolder(sub, depth))}
-      {f.items.map(renderItem)}
+      {f.items.filter((i) => rowShown(i, f.path)).map(renderItem)}
     </ul>
   );
 
   return (
-    <div className={styles.library}>
+    <div className={styles.library} ref={rootRef}>
       <div className={styles.pickers}>
         <label className={styles.picker}>
           <strong>{folderName ? `Folder: ${folderName}` : "1. Choose the folder with your exports"}</strong>
@@ -504,9 +617,11 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
       {activities.length > 0 && (
         <>
           <div className={styles.filters}>
-            {(["all", "new", "partial", "instrava", "added", ...(strava ? [] : ["unknown"])] as Filter[]).map((f) => (
+            {(["all", "new", "partial", "instrava", "added", ...(strava ? [] : ["unknown"]), ...(counts.ignored || filter === "ignored" ? ["ignored"] : [])] as Filter[]).map((f) => (
               <button key={f} className={filter === f ? styles.filterOn : undefined} onClick={() => setFilter(f)}>
-                {f === "all" ? `All (${activities.length.toLocaleString()})` : `${STATUS_LABELS[f]} (${counts[f].toLocaleString()})`}
+                {f === "all"
+                  ? `All (${(activities.length - counts.ignored).toLocaleString()})`
+                  : `${f === "ignored" ? "Ignored" : STATUS_LABELS[f]} (${counts[f].toLocaleString()})`}
               </button>
             ))}
             <input className={styles.search} type="search" placeholder="Search name, date, sport…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -520,12 +635,15 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
           <div className={styles.workspace}>
             <div className={styles.treePane}>
               <div className={styles.treeTools}>
-                <button onClick={() => toggle(visible.filter((i) => i.kind === "activity").map((i) => i.key), true)}>Select all shown</button>
+                <button onClick={() => toggle(visible.filter((i) => i.kind === "activity" && !isIgnored(i) && rowShown(i, folderOf(i.path))).map((i) => i.key), true)}>
+                  Select all shown
+                </button>
                 <button onClick={() => setChecked(new Set())} disabled={!checked.size}>
                   Clear selection
                 </button>
               </div>
               <div className={styles.tree}>{visible.length ? renderList(tree, 0) : <p className={styles.muted}>Nothing matches.</p>}</div>
+              <p className={styles.muted}>Tip: after clicking an activity, use the ↑ and ↓ keys to move through the list.</p>
               {checkedItems.length > 0 && (
                 <div className={styles.selectionBar}>
                   <strong>{checkedItems.length.toLocaleString()} selected</strong>
@@ -539,6 +657,7 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
                   </select>
                   <button onClick={() => setAdded(checkedItems.map((i) => i.key), true)}>Mark as added to Strava</button>
                   <button onClick={() => setAdded(checkedItems.map((i) => i.key), false)}>Unmark</button>
+                  <button onClick={() => setIgnored(checkedItems.map((i) => i.key), true)}>Ignore</button>
                   <button className={styles.primary} disabled={busy} onClick={() => exportItems(checkedItems)}>
                     {busy ? "Exporting…" : "Export for Strava"}
                   </button>
@@ -571,6 +690,8 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
                   }
                   onSport={(s) => setSport([sel.key], s)}
                   onAdded={(on) => setAdded([sel.key], on)}
+                  ignored={isIgnored(sel)}
+                  onIgnored={(on) => setIgnored([sel.key], on)}
                   onSelect={setSelected}
                   onExport={() => exportItems([sel])}
                   onSendToFixer={onSendToFixer ? () => sendToFixer(sel) : undefined}
@@ -585,7 +706,7 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
       )}
 
       <details className={styles.marksBox}>
-        <summary>Your marks ({Object.keys(marks.added).length} added to Strava, {Object.keys(marks.sports).length} sports changed)</summary>
+        <summary>Your marks ({Object.keys(marks.added).length} added to Strava, {Object.keys(marks.sports).length} sports changed, {Object.keys(marks.ignored).length} ignored)</summary>
         <p className={styles.muted}>
           Sports you change and activities you mark as added are remembered in this browser. Save them to a file as a backup, or
           to carry on in another browser.
@@ -617,13 +738,15 @@ interface DetailsProps {
   onToggleMap: (key: string) => void;
   onSport: (sport: string | null) => void;
   onAdded: (on: boolean) => void;
+  ignored: boolean;
+  onIgnored: (on: boolean) => void;
   onSelect: (key: string) => void;
   onExport: () => void;
   onSendToFixer?: () => void;
   busy: boolean;
 }
 
-function Details({ item, activity, sport, marks, matches, dupes, stravaLoaded, hiddenOnMap, colors, onToggleMap, onSport, onAdded, onSelect, onExport, onSendToFixer, busy }: DetailsProps) {
+function Details({ item, activity, sport, marks, matches, dupes, stravaLoaded, hiddenOnMap, colors, onToggleMap, onSport, onAdded, ignored, onIgnored, onSelect, onExport, onSendToFixer, busy }: DetailsProps) {
   const counts = activity
     ? (["gps", "heartRate", "cadence", "power", "temperature", "elevation"] as Channel[])
         .map((c) => [c, activity.samples.filter((s) => (c === "gps" ? s.lat !== undefined : s[c] !== undefined)).length] as const)
@@ -662,6 +785,9 @@ function Details({ item, activity, sport, marks, matches, dupes, stravaLoaded, h
           </select>
         </label>
         {item.rawSport && <span className={styles.muted}>The file says “{item.rawSport}”.</span>}
+        <label>
+          <input type="checkbox" checked={ignored} onChange={(e) => onIgnored(e.target.checked)} /> Ignore (hide from the list)
+        </label>
         <label>
           <input type="checkbox" checked={!!added} onChange={(e) => onAdded(e.target.checked)} /> Added to Strava
           {added && <span className={styles.muted}> (marked {fmtDate(Date.parse(added))})</span>}
