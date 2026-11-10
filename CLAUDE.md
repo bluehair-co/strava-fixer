@@ -46,6 +46,15 @@ These are David's standing preferences. Follow them in every session.
   `verifyCroppedFit` / `verifyCroppedGpx` (in `src/lib/crop.ts`) check the
   result against that file.
 
+- Activity library (the "Activity library" tab, David's request): indexes a
+  folder of exports (Nike Run Club JSON, TomTom, Google Fit/Takeout TCX and
+  session JSON, FIT, GPX, zips inside the folder), shows sensors per file,
+  compares with a Strava export zip (exact and partial matches), lets David
+  fix the sport, mark files as added to Strava (kept in localStorage, with a
+  save/load file backup), and exports the selected ones as FIT files with
+  the sport set. Exported files copy every recorded value unchanged; only a
+  missing distance is worked out from the GPS track.
+
 ## Decisions so far
 - Files only for now: no Strava API (creating an API app needs a paid Strava
   subscription since June 2026). Users export the original file from Strava,
