@@ -84,6 +84,45 @@ exactly what one of your files recorded at that moment.
 Deleting an activity on Strava removes its kudos, comments, photos, title,
 description and private notes, so copy anything you want to keep first.
 
+## Activity library
+
+The **Activity library** tab helps you bring old activities from other apps
+(Nike Run Club, TomTom, Google Fit, Google Takeout, Garmin, ...) into Strava
+without creating duplicates.
+
+1. **Choose the folder** with your exports. Every FIT, GPX, TCX and JSON file
+   in it (and in its subfolders, and inside any .zip files in it, such as a
+   Google Takeout archive) is read, and the activities are listed in a folder
+   tree with their date, duration, distance and sport.
+2. Each activity shows what it recorded: **GPS** only, or also **HR** (heart
+   rate), **Cad** (cadence), **Pwr** (power) or **Temp** (temperature) from
+   a device. "Summary" means the file only has a time, duration and distance
+   (e.g. Google Fit's "All Sessions" files).
+3. **Choose your Strava export** (.zip). Request it on strava.com under
+   Settings → My Account → Download or Delete Your Account → Request your
+   archive. Each activity in your folder is then marked:
+   - **In Strava**: same start (within 3 minutes), same length and distance,
+     and the GPS tracks lie on top of each other.
+   - **Partial match**: a Strava activity overlaps it in time, but something
+     differs: different start or end, distance or route, or only one of them
+     has GPS or heart rate. Click it to see what differs, with both tracks on
+     the map and a link to the activity on Strava. You decide.
+   - **Not in Strava**.
+   Activities that appear twice in your folder (say, the same run in Nike Run
+   Club and Google Fit) are listed under "Also in your folder".
+4. **Fix the sport** if it's missing or wrong, one by one or for everything
+   you've ticked ("Set sport…"). A Strava activity's sport can be copied with
+   one click.
+5. Tick the activities you want and **Export for Strava**. You get FIT files
+   with the sport set (one file, or a zip with folders of 25, as Strava's
+   uploader takes 25 files at a time). Every recorded value is copied as it
+   is. Upload them at https://www.strava.com/upload/select.
+6. **Mark as added to Strava** to keep track of what you've done. Your marks
+   and sport changes are remembered in this browser; under "Your marks" you
+   can save them to a file as a backup, or load them in another browser.
+
+Everything happens in your browser; no file is uploaded anywhere.
+
 ## Running it on your computer
 
 You need [Node.js](https://nodejs.org) 22 or newer.
@@ -114,6 +153,11 @@ GitHub runs all three on every pull request (see the "Checks" tab).
   the result, using `src/lib/merge.ts` (GPS into one file) or
   `src/lib/join.ts` (one after the other) when they fit.
   `src/components/Merge.tsx` and `TracksMap.tsx` are the page.
+- `src/lib/library/` is the Activity library: `formats.ts` reads FIT, GPX,
+  TCX, Nike Run Club and Google Fit files, `strava.ts` reads the Strava
+  export, `match.ts` finds matching activities, `export.ts` writes the FIT
+  files for Strava, and `marks.ts` remembers your marks. `src/lib/zip.ts`
+  opens and writes .zip files. `src/components/Library.tsx` is the page.
 - `src/components/Editor.tsx` is the page with the buttons;
   `src/components/MapView.tsx` draws the map using Leaflet.
 

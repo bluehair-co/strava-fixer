@@ -1,0 +1,423 @@
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pickers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 2px dashed #c4c4c4;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.picker:hover {
+  border-color: #fc4c02;
+}
+
+.muted {
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.missing {
+  color: #b00020;
+  font-weight: 600;
+}
+
+.error {
+  color: #b00020;
+}
+
+.info {
+  color: #1b7a3a;
+}
+
+.notice {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: #fff4e5;
+  color: #5f3a00;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.progress progress {
+  flex: 1;
+  max-width: 300px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.filters button,
+.treeTools button,
+.fileButton,
+.selectionBar button,
+.selectionBar select,
+.controls select {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #c4c4c4;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.filters button:disabled,
+.treeTools button:disabled,
+.selectionBar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.filters .filterOn {
+  background: #222;
+  border-color: #222;
+  color: #fff;
+}
+
+.search {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #c4c4c4;
+  border-radius: 6px;
+  min-width: 200px;
+  font-size: 0.85rem;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.treePane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.5rem;
+  min-width: 0;
+}
+
+.treeTools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.tree {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.list {
+  list-style: none;
+  padding-left: 0.9rem;
+}
+
+.tree > .list {
+  padding-left: 0;
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0;
+}
+
+.folderButton {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.caret {
+  display: inline-block;
+  width: 0.8rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.35rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.row:hover {
+  background: rgba(127, 127, 127, 0.1);
+}
+
+.rowSelected,
+.rowSelected:hover {
+  background: rgba(252, 76, 2, 0.12);
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.rowName {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowInfo {
+  color: #666;
+  font-size: 0.8rem;
+}
+
+.otherRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem 0.2rem 1.6rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.badges {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 7.5rem;
+}
+
+.badge {
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  line-height: 1.3rem;
+  background: #e8eaed;
+  color: #3c4043;
+}
+
+.badgeGps {
+  background: #e6f4ea;
+  color: #0d652d;
+}
+
+.badgeSensor {
+  background: #fce8e6;
+  color: #a50e0e;
+}
+
+.status {
+  flex: none;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.35rem;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.status_new {
+  background: #fff4e5;
+  color: #8a4b00;
+  border-color: #f5c58a;
+}
+
+.status_partial {
+  background: #fef7e0;
+  color: #7a5c00;
+  border-color: #f2d16b;
+}
+
+.status_instrava {
+  background: #e6f4ea;
+  color: #0d652d;
+  border-color: #a8dab5;
+}
+
+.status_added {
+  background: #e8f0fe;
+  color: #174ea6;
+  border-color: #aecbfa;
+}
+
+.status_unknown {
+  background: #f1f3f4;
+  color: #5f6368;
+}
+
+.selectionBar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.5rem;
+  border-radius: 8px;
+  background: #fafafa;
+  border: 1px solid #ddd;
+  color: #222;
+}
+
+.selectionBar .primary,
+.treeTools .primary {
+  background: #fc4c02;
+  border-color: #fc4c02;
+  color: #fff;
+}
+
+.detailPane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  position: sticky;
+  top: 0.5rem;
+}
+
+.map {
+  height: 45vh;
+  min-height: 280px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  max-height: 45vh;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.details h4 {
+  margin-top: 0.5rem;
+}
+
+.detailTitle {
+  font-size: 1.05rem;
+  word-break: break-word;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: center;
+}
+
+.matchList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.matchHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.matchHead a {
+  color: #fc4c02;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.reasons {
+  margin: 0.2rem 0 0 1.6rem;
+  font-size: 0.82rem;
+  color: #444;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  flex: none;
+}
+
+.inlineButton {
+  border: none;
+  background: none;
+  color: #1a73e8;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+  text-align: left;
+  word-break: break-all;
+}
+
+.marksBox summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.marksBox[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .muted,
+  .rowInfo {
+    color: #aaa;
+  }
+
+  .reasons {
+    color: #ccc;
+  }
+}
+
+@media (max-width: 800px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .detailPane {
+    position: static;
+  }
+
+  .details {
+    max-height: none;
+  }
+}

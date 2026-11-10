@@ -3,11 +3,12 @@
 import { useState } from "react";
 import Editor, { type IncomingFile } from "./Editor";
 import Merge from "./Merge";
+import Library from "./Library";
 import styles from "./Editor.module.css";
 
-type Tab = "fix" | "merge";
+type Tab = "fix" | "merge" | "library";
 
-/** The two tools of the app, as tabs. */
+/** The tools of the app, as tabs. */
 export default function App() {
   const [tab, setTab] = useState<Tab>("fix");
   // A combined file sent from "Combine recordings" to "Fix GPS points".
@@ -18,7 +19,7 @@ export default function App() {
     setTab("fix");
   };
 
-  // Both tabs stay in the page (only one is shown), so switching back and
+  // All tabs stay in the page (only one is shown), so switching back and
   // forth keeps the files and choices in each.
   return (
     <>
@@ -29,12 +30,18 @@ export default function App() {
         <button role="tab" aria-selected={tab === "merge"} onClick={() => setTab("merge")}>
           Combine recordings
         </button>
+        <button role="tab" aria-selected={tab === "library"} onClick={() => setTab("library")}>
+          Activity library
+        </button>
       </nav>
       <div hidden={tab !== "fix"}>
         <Editor incoming={incoming} />
       </div>
       <div hidden={tab !== "merge"}>
         <Merge onSendToFixer={sendToFixer} />
+      </div>
+      <div hidden={tab !== "library"}>
+        <Library onSendToFixer={sendToFixer} />
       </div>
     </>
   );
