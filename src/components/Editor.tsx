@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { fixedFileName, loadActivity, loadActivityBytes, type LoadedActivity } from "@/lib/activity";
 import { isCropped, keptRange, NO_CROP, type Crop } from "@/lib/crop";
+import { straightenAllStops } from "@/lib/stops";
 import {
   clearPositions,
   countChanged,
@@ -19,6 +20,7 @@ import SelectionPanel from "./SelectionPanel";
 import NextSteps from "./NextSteps";
 import DistanceSummary from "./DistanceSummary";
 import CropControls from "./CropControls";
+import AutoTidy from "./AutoTidy";
 import styles from "./Editor.module.css";
 
 // Leaflet needs the browser, so the map is only loaded on the client.
@@ -305,6 +307,22 @@ export default function Editor({ incoming = null }: { incoming?: IncomingFile | 
       </p>
       {message && <p className={styles[message.kind]}>{message.text}</p>}
       <CropControls times={points.map((p) => p.time)} crop={crop} onChange={setCrop} />
+      <AutoTidy
+        points={points}
+        crop={crop}
+        locked={locked}
+        onStraighten={(settings) => {
+          apply(straightenAllStops(points, settings));
+          setSelection(null);
+          setMessage(null);
+        }}
+        onCrop={(next) => {
+          setCrop(next);
+          setSelection(null);
+          setMessage(null);
+        }}
+        onSelect={(from, to) => setSelection({ from, to })}
+      />
       {changed > 0 && distances?.before != null && distances.after != null && (
         <DistanceSummary
           original={activity.points}
