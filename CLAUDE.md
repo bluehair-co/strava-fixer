@@ -46,6 +46,12 @@ These are David's standing preferences. Follow them in every session.
   `verifyCroppedFit` / `verifyCroppedGpx` (in `src/lib/crop.ts`) check the
   result against that file.
 
+- Tidying up automatically (David's request, "Fix GPS points" tab):
+  `src/lib/stops.ts` finds stops and idle time at the start/end from GPS
+  positions and times only (staying within a radius for a minimum time,
+  both tunable). It only ever uses the existing straighten and crop, so it
+  changes nothing those don't, and the same safety checks apply.
+
 - Activity library (the "Activity library" tab, David's request): indexes a
   folder of exports (Nike Run Club JSON, TomTom, Google Fit/Takeout TCX and
   session JSON, FIT, GPX, zips inside the folder), shows sensors per file,
