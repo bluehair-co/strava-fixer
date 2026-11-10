@@ -27,6 +27,8 @@ export interface StravaActivity {
   preview: Preview | null;
   /** True once start/end come from the file itself rather than the CSV. */
   exactTimes: boolean;
+  /** The app or device that recorded it, from its file, if it says. */
+  device: string | null;
 }
 
 /** Splits CSV text into rows of fields (handles quotes, commas and line breaks in quotes). */
@@ -125,6 +127,7 @@ export function readActivitiesCsv(text: string): StravaActivity[] {
       channels: null,
       preview: null,
       exactTimes: false,
+      device: null,
     });
   }
   return out.sort((a, b) => a.start - b.start);
@@ -167,6 +170,7 @@ export async function openStravaExport(blob: Blob): Promise<StravaExport> {
                 a.exactTimes = true;
               }
               a.channels = act.channels;
+              a.device = act.device;
               a.preview = previewOf(act.samples);
             }
           } catch {

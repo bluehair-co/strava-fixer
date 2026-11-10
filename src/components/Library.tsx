@@ -40,6 +40,7 @@ const BATCH = 25;
 
 const fmtDate = (t: number) => new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 const fmtTime = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+const fmtTimeSec = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtKm = (m: number | null) => (m == null ? "–" : `${(m / 1000).toFixed(2)} km`);
 function fmtDuration(ms: number) {
   const s = Math.round(ms / 1000);
@@ -707,6 +708,23 @@ function Details({ item, activity, sport, marks, matches, dupes, stravaLoaded, h
                   <li key={r}>{r}</li>
                 ))}
               </ul>
+              <SideBySide
+                open={match.kind === "partial"}
+                leftLabel="In this file"
+                rightLabel="On Strava"
+                left={fileSide(item, sport)}
+                right={{
+                  name: other.name || null,
+                  sport: sportFromStrava(other.type),
+                  sportText: other.type,
+                  start: other.start,
+                  end: other.end,
+                  distance: other.distance,
+                  channels: other.file ? other.channels : [],
+                  gpsCount: other.preview?.gpsCount ?? 0,
+                  source: other.file ? (other.device ?? `${other.file.replace(/\.gz$/i, "").split(".").pop()!.toUpperCase()} file`) : "Manual entry (no file)",
+                }}
+              />
             </li>
           ))}
         </ul>
@@ -731,11 +749,115 @@ function Details({ item, activity, sport, marks, matches, dupes, stravaLoaded, h
                     <li key={r}>{r}</li>
                   ))}
                 </ul>
+                <SideBySide open={match.kind === "partial"} leftLabel="In this file" rightLabel="In the other file" left={fileSide(item, sport)} right={fileSide(other, other.sport)} />
               </li>
             ))}
           </ul>
         </>
       )}
     </div>
+  );
+}
+
+/* ---------- Side-by-side comparison ---------- */
+
+interface Side {
+  name: string | null;
+  sport: string | null;
+  /** How the sport is written there, if not one of ours. */
+  sportText?: string;
+  start: number;
+  end: number;
+  distance: number | null;
+  channels: Channel[] | null;
+  gpsCount: number;
+  source: string | null;
+}
+
+function fileSide(i: Item, sport: string | null): Side {
+  return {
+    name: i.title ?? i.file.name,
+    sport,
+    start: i.start,
+    end: i.end,
+    distance: i.distance,
+    channels: i.channels,
+    gpsCount: i.preview?.gpsCount ?? 0,
+    source: [i.format ? FORMAT_LABELS[i.format] : null, i.device].filter(Boolean).join(" · ") || null,
+  };
+}
+
+const dataList = (channels: Channel[] | null) =>
+  channels === null ? "Unknown" : channels.length ? (["gps", "heartRate", "cadence", "power", "temperature", "elevation"] as Channel[]).filter((c) => channels.includes(c)).map((c) => CHANNEL_LONG[c]).join(", ") : "None (summary only)";
+
+/** A table with what each side has, row by row; rows that differ are highlighted. */
+function SideBySide({ left, right, leftLabel, rightLabel, open }: { left: Side; right: Side; leftLabel: string; rightLabel: string; open: boolean }) {
+  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+  const rows: { label: string; l: string; r: string; same: boolean }[] = [
+    { label: "Name", l: left.name ?? "–", r: right.name ?? "–", same: true },
+    {
+      label: "Sport",
+      l: left.sport ? sportLabel(left.sport) : (left.sportText ?? "Unknown"),
+      r: right.sportText ?? (right.sport ? sportLabel(right.sport) : "Unknown"),
+      same: left.sport === right.sport,
+    },
+    { label: "Date", l: fmtDate(left.start), r: fmtDate(right.start), same: fmtDate(left.start) === fmtDate(right.start) },
+    { label: "Start", l: fmtTimeSec(left.start), r: fmtTimeSec(right.start), same: near(left.start, right.start, 60_000) },
+    { label: "End", l: fmtTimeSec(left.end), r: fmtTimeSec(right.end), same: near(left.end, right.end, 60_000) },
+    { label: "Duration", l: fmtDuration(left.end - left.start), r: fmtDuration(right.end - right.start), same: near(left.end - left.start, right.end - right.start, 60_000) },
+    {
+      label: "Distance",
+      l: fmtKm(left.distance),
+      r: fmtKm(right.distance),
+      same: left.distance == null || right.distance == null || Math.min(left.distance, right.distance) / Math.max(left.distance, right.distance) >= 0.98,
+    },
+    { label: "GPS points", l: left.gpsCount.toLocaleString(), r: right.channels === null ? "Unknown" : right.gpsCount.toLocaleString(), same: right.channels === null || Math.min(left.gpsCount, right.gpsCount) >= 0.67 * Math.max(left.gpsCount, right.gpsCount) },
+    { label: "Recorded data", l: dataList(left.channels), r: dataList(right.channels), same: right.channels === null || dataList(left.channels) === dataList(right.channels) },
+    { label: "Recorded with", l: left.source ?? "–", r: right.source ?? "–", same: true },
+  ];
+  // When each was recording, on one time line.
+  const t0 = Math.min(left.start, right.start);
+  const t1 = Math.max(left.end, right.end, t0 + 1000);
+  const bar = (s: Side) => ({ left: `${((s.start - t0) / (t1 - t0)) * 100}%`, width: `${Math.max(0.5, ((s.end - s.start) / (t1 - t0)) * 100)}%` });
+  return (
+    <details className={styles.compare} open={open}>
+      <summary>Compare side by side</summary>
+      <table className={styles.compareTable}>
+        <thead>
+          <tr>
+            <th />
+            <th>{leftLabel}</th>
+            <th>{rightLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label} className={row.same ? undefined : styles.differs}>
+              <th>{row.label}</th>
+              <td>{row.l}</td>
+              <td>{row.r}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className={styles.timeline} aria-label="When each was recording">
+        <div className={styles.timelineRow}>
+          <span className={styles.timelineLabel}>{leftLabel}</span>
+          <span className={styles.timelineTrack}>
+            <span className={styles.timelineBar} style={{ ...bar(left), background: LOCAL_COLOR }} />
+          </span>
+        </div>
+        <div className={styles.timelineRow}>
+          <span className={styles.timelineLabel}>{rightLabel}</span>
+          <span className={styles.timelineTrack}>
+            <span className={styles.timelineBar} style={{ ...bar(right), background: "#1a73e8" }} />
+          </span>
+        </div>
+        <div className={styles.timelineAxis}>
+          <span>{fmtTime(t0)}</span>
+          <span>{fmtTime(t1)}</span>
+        </div>
+      </div>
+    </details>
   );
 }
