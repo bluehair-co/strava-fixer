@@ -12,16 +12,18 @@ export interface Marks {
   added: Record<string, string>;
   /** Item key → date (ISO) it was last exported. */
   exported: Record<string, string>;
+  /** Item key → date (ISO) you chose to ignore it (hidden from the list). */
+  ignored: Record<string, string>;
 }
 
 const STORAGE_KEY = "strava-fixer.library.marks.v1";
 
-export const EMPTY_MARKS: Marks = { sports: {}, added: {}, exported: {} };
+export const EMPTY_MARKS: Marks = { sports: {}, added: {}, exported: {}, ignored: {} };
 
 export function normaliseMarks(data: unknown): Marks {
   const o = (data && typeof data === "object" ? data : {}) as Partial<Marks>;
   const rec = (v: unknown) => (v && typeof v === "object" ? (v as Record<string, string>) : {});
-  return { sports: rec(o.sports), added: rec(o.added), exported: rec(o.exported) };
+  return { sports: rec(o.sports), added: rec(o.added), exported: rec(o.exported), ignored: rec(o.ignored) };
 }
 
 export function loadMarks(): Marks {
@@ -48,5 +50,6 @@ export function mergeMarks(current: Marks, incoming: Marks): Marks {
     sports: { ...current.sports, ...incoming.sports },
     added: { ...current.added, ...incoming.added },
     exported: { ...current.exported, ...incoming.exported },
+    ignored: { ...current.ignored, ...incoming.ignored },
   };
 }
