@@ -567,7 +567,7 @@ export default function Library({ onSendToFixer }: { onSendToFixer?: (fileName: 
       <div className={styles.pickers}>
         <label className={styles.picker}>
           <strong>{folderName ? `Folder: ${folderName}` : "1. Choose the folder with your exports"}</strong>
-          <span className={styles.muted}>Nike Run Club, TomTom, Google Fit, Google Takeout… (FIT, GPX, TCX, JSON; zips inside are opened too)</span>
+          <span className={styles.muted}>Nike Run Club, TomTom, Google Fit, Google Takeout… (FIT, GPX, TCX, JSON incl. TomTom .json_2; zips inside are opened too)</span>
           <input
             type="file"
             hidden
