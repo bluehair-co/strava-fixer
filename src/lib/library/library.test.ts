@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readZip, writeZip } from "../zip";
-import { readActivities, sportFromName, type Activity } from "./formats";
+import { ACTIVITY_EXTENSIONS, readActivities, sportFromName, type Activity } from "./formats";
 import { compare, findMatches, previewOf } from "./match";
 import { parseStravaDate, readActivitiesCsv, openStravaExport } from "./strava";
 import { buildStravaFit, exportFileName } from "./export";
@@ -91,6 +91,66 @@ describe("reading files", () => {
     };
     const [a] = readActivities("2020-05-03T09_12_00+02_00_WALKING.json", enc(JSON.stringify(s)));
     expect(a).toMatchObject({ format: "googlefit", sport: "walk", start: T0, end: T0 + 1800_000, distance: 2400.5, channels: [] });
+  });
+
+  it("reads TomTom MySports .json_2 files", () => {
+    // Shaped like a real TomTom export file (trimmed).
+    const t = {
+      id: 86550309,
+      start_datetime: "2016-11-24T06:27:09+00:00",
+      start_datetime_user: "2016-11-24T07:27:09+01:00",
+      full_type: "CYCLE",
+      formats: ["fit", "pwx", "csv", "tcx"],
+      time_series: {
+        heartrate: [[12.0, 63.0], [13.0, 65.0], [14.0, 70.0]],
+        timer_stop: [[959.0, 0.0]],
+        steps: [[1.0, 0.0], [2.0, 0.0]],
+      },
+      aggregates: { distance_total: 4700.0, elapsed_time_total: 959.0, heartrate_avg: 123.15 },
+    };
+    const name = "cycling_2016-11-24_07-27-09.json_2";
+    expect(ACTIVITY_EXTENSIONS.test(name)).toBe(true);
+    const [a] = readActivities(name, enc(JSON.stringify(t)));
+    const start = Date.parse("2016-11-24T06:27:09Z");
+    expect(a).toMatchObject({ format: "tomtom", sport: "ride", rawSport: "CYCLE", device: "TomTom", start, end: start + 959_000, distance: 4700 });
+    expect(a.channels).toEqual(["heartRate"]);
+    expect(a.samples.map((s) => [s.time - start, s.heartRate])).toEqual([[12_000, 63], [13_000, 65], [14_000, 70]]);
+  });
+
+  it("reads TomTom indoor workouts, treadmill distance and labels", () => {
+    const base = { start_datetime: iso(T0), formats: ["fit", "pwx", "csv", "tcx"] };
+    const tread = {
+      ...base,
+      full_type: "RUN_TREADMILL",
+      time_series: { distance: [[1, 0], [2, 2.5], [3, 5.1]], heartrate: [[3, 64]], speed: [[1, 0], [2, 2.5]] },
+      aggregates: { distance_total: 5.1, elapsed_time_total: 3 },
+    };
+    const [t] = readActivities("treadmill_2019-10-03_07-09-06.json_2", enc(JSON.stringify(tread)));
+    expect(t).toMatchObject({ sport: "treadmill", distance: 5.1, channels: ["heartRate"] });
+    expect(t.samples.find((s) => s.time === T0 + 3000)).toMatchObject({ distance: 5.1, heartRate: 64 });
+
+    const bike = { ...base, full_type: "CYCLE_VELO", labels: { name: "Static bike" }, aggregates: { distance_total: 0, elapsed_time_total: 633 } };
+    const [b] = readActivities("indoor_cycling.json_2", enc(JSON.stringify(bike)));
+    expect(b).toMatchObject({ sport: "ride", title: "Static bike", rawSport: "CYCLE_VELO (Static bike)", distance: null, end: T0 + 633_000 });
+
+    const gym = { ...base, full_type: "GYM", labels: { name: "Basketball" }, time_series: { heartrate: [[12, 59]] } };
+    expect(readActivities("gym.json_2", enc(JSON.stringify(gym)))[0].sport).toBe("workout");
+
+    const tracking = { start_datetime: iso(T0), full_type: "TRACKING", aggregates: { distance_daily: [7151, 7333] } };
+    expect(() => readActivities("tracking_2016-11-21_00-00-00.json_2", enc(JSON.stringify(tracking)))).toThrow(/isn't an activity/);
+  });
+
+  it("reads positions from a TomTom file when it has them", () => {
+    const t = {
+      start_datetime: iso(T0),
+      full_type: "RUN",
+      time_series: { positions: [[0, 52.37, 4.89], [1, { lat: 52.3701, lon: 4.8901 }]], heartrate: [[1, 120]] },
+    };
+    const [a] = readActivities("running.json_2", enc(JSON.stringify(t)));
+    expect(a.sport).toBe("run");
+    expect(a.channels).toEqual(["gps", "heartRate"]);
+    expect(a.samples[1]).toMatchObject({ time: T0 + 1000, lat: 52.3701, lon: 4.8901, heartRate: 120 });
+    expect(a.distance).toBeGreaterThan(0);
   });
 
   it("says when a JSON file isn't an activity", () => {

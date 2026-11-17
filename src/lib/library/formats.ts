@@ -7,6 +7,8 @@
  *  - Nike Run Club JSON (one activity, or a list of them, per file)
  *  - Google Fit Takeout "All Sessions" JSON (a summary: sport, times,
  *    distance, but no track)
+ *  - TomTom MySports JSON (".json_2" files in a TomTom export: times,
+ *    sport, distance, heart rate; GPS only if the file has positions)
  *
  * Values are kept as recorded. Nothing is worked out here except, for files
  * that don't store a total distance, the length of the GPS track.
@@ -19,7 +21,7 @@ import { readGpxSamples, type Channel, type Sample } from "../sources";
 import { metresBetween } from "../track";
 import { guessSport } from "./sports";
 
-export type Format = "fit" | "gpx" | "tcx" | "nike" | "googlefit";
+export type Format = "fit" | "gpx" | "tcx" | "nike" | "googlefit" | "tomtom";
 
 export const FORMAT_LABELS: Record<Format, string> = {
   fit: "FIT",
@@ -27,6 +29,7 @@ export const FORMAT_LABELS: Record<Format, string> = {
   tcx: "TCX",
   nike: "Nike Run Club JSON",
   googlefit: "Google Fit session",
+  tomtom: "TomTom MySports JSON",
 };
 
 export interface ActivitySample extends Sample {
@@ -355,10 +358,105 @@ function readGoogleFitSession(o: Json): Activity {
   });
 }
 
+/* ---------- TomTom MySports JSON (".json_2") ---------- */
+
+/*
+ * TomTom's MySports export holds one JSON file per activity, named like
+ * "cycling_2016-11-24_07-27-09.json_2". Each value series is a list of
+ * [seconds since the start, value] pairs under "time_series", and the totals
+ * are under "aggregates".
+ */
+
+const isTomTom = (o: unknown): o is Json =>
+  !!o &&
+  typeof o === "object" &&
+  "start_datetime" in (o as Json) &&
+  ("time_series" in (o as Json) || "aggregates" in (o as Json) || "full_type" in (o as Json)) &&
+  // "tracking_..." files are a week of daily step/sleep totals, not a workout.
+  String((o as Json).full_type).toUpperCase() !== "TRACKING";
+
+/**
+ * TomTom's activity types that our sport guesser doesn't already understand.
+ * (CYCLE, CYCLE_VELO, RUN, RUN_TREADMILL, SWIM, HIKE... it already does.)
+ */
+const TOMTOM_SPORTS: Record<string, string> = { GYM: "workout", UNIVERSAL: "workout", FREESTYLE: "workout" };
+
+/** A position as TomTom might write it: [lat, lon], {lat, lon} or {latitude, longitude}. */
+function tomTomPosition(v: unknown): { lat: number; lon: number } | null {
+  let lat: unknown;
+  let lon: unknown;
+  if (Array.isArray(v)) [lat, lon] = v;
+  else if (v && typeof v === "object") {
+    const o = v as Json;
+    lat = o.lat ?? o.latitude;
+    lon = o.lon ?? o.lng ?? o.long ?? o.longitude;
+  }
+  const la = num(lat);
+  const lo = num(lon);
+  if (la === undefined || lo === undefined || Math.abs(la) > 90 || Math.abs(lo) > 180 || (la === 0 && lo === 0)) return null;
+  return { lat: la, lon: lo };
+}
+
+function readTomTom(o: Json): Activity {
+  const start = Date.parse(String(o.start_datetime));
+  const series = (o.time_series && typeof o.time_series === "object" ? o.time_series : {}) as Record<string, unknown>;
+  const agg = (o.aggregates && typeof o.aggregates === "object" ? o.aggregates : {}) as Json;
+  const byTime = new Map<number, ActivitySample>();
+  const at = (offset: number) => {
+    const t = start + Math.round(offset * 1000);
+    let s = byTime.get(t);
+    if (!s) byTime.set(t, (s = { time: t }));
+    return s;
+  };
+  const pairs = (key: string) => (Array.isArray(series[key]) ? (series[key] as unknown[]) : []).filter(Array.isArray) as unknown[][];
+  for (const [key, field] of [
+    ["heartrate", "heartRate"],
+    ["cadence", "cadence"],
+    ["power", "power"],
+    ["altitude", "elevation"],
+    ["elevation", "elevation"],
+    ["temperature", "temperature"],
+    // How far so far, in metres (treadmill, pool swims, ...).
+    ["distance", "distance"],
+  ] as const) {
+    for (const [t, v] of pairs(key)) {
+      const off = num(t);
+      const val = num(v);
+      if (off !== undefined && val !== undefined) at(off)[field] = val;
+    }
+  }
+  for (const key of ["positions", "position", "gps", "locations", "location"]) {
+    for (const p of pairs(key)) {
+      const off = num(p[0]);
+      const pos = p.length > 2 ? tomTomPosition(p.slice(1)) : tomTomPosition(p[1]);
+      if (off === undefined || !pos) continue;
+      const s = at(off);
+      s.lat = pos.lat;
+      s.lon = pos.lon;
+    }
+  }
+  const elapsed = num(agg.elapsed_time_total);
+  const rawSport = typeof o.full_type === "string" ? o.full_type : typeof o.type === "string" ? o.type : null;
+  // The name picked on the watch for gym/freestyle workouts, e.g. "Basketball" or "Static bike".
+  const label = o.labels && typeof o.labels === "object" ? (o.labels as Json).name : undefined;
+  const title = typeof label === "string" && label ? label : typeof o.name === "string" && o.name ? o.name : null;
+  return finish({
+    format: "tomtom",
+    sport: guessSport(title) ?? ((rawSport && TOMTOM_SPORTS[rawSport.toUpperCase()]) || guessSport(rawSport)),
+    rawSport: title && rawSport ? `${rawSport} (${title})` : rawSport,
+    title,
+    device: "TomTom",
+    start,
+    end: elapsed !== undefined ? start + elapsed * 1000 : undefined,
+    distance: num(agg.distance_total) ?? null,
+    samples: [...byTime.values()],
+  });
+}
+
 /* ---------- Entry point ---------- */
 
 /** Extensions we try to read; anything else in a folder is listed but not opened. */
-export const ACTIVITY_EXTENSIONS = /\.(fit|gpx|tcx|json)(\.gz)?$/i;
+export const ACTIVITY_EXTENSIONS = /\.(fit|gpx|tcx|json(_\d+)?)(\.gz)?$/i;
 
 /** Thrown for files that open fine but aren't activities (e.g. Google Fit daily totals). */
 export class NotAnActivity extends Error {}
@@ -372,7 +470,7 @@ export function readActivities(name: string, bytes: Uint8Array): Activity[] {
   const text = new TextDecoder().decode(bytes);
   if (isGpx(text)) return [readGpx(text)];
   if (isTcx(text)) return readTcx(text);
-  if (/\.json$/i.test(name) || /^\s*[[{]/.test(text.slice(0, 10))) {
+  if (/\.json(_\d+)?$/i.test(name) || /^\s*[[{]/.test(text.slice(0, 10))) {
     let data: unknown;
     try {
       data = JSON.parse(text);
@@ -388,6 +486,7 @@ export function readActivities(name: string, bytes: Uint8Array): Activity[] {
     for (const item of list) {
       if (isNike(item)) out.push(readNikeOne(item));
       else if (isGoogleFitSession(item)) out.push(readGoogleFitSession(item));
+      else if (isTomTom(item)) out.push(readTomTom(item));
     }
     if (!out.length) throw new NotAnActivity("This JSON file isn't an activity (e.g. daily totals or settings).");
     return out;

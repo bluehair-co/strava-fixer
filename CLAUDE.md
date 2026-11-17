@@ -53,7 +53,8 @@ These are David's standing preferences. Follow them in every session.
   changes nothing those don't, and the same safety checks apply.
 
 - Activity library (the "Activity library" tab, David's request): indexes a
-  folder of exports (Nike Run Club JSON, TomTom, Google Fit/Takeout TCX and
+  folder of exports (Nike Run Club JSON, TomTom (incl. MySports .json_2
+  files), Google Fit/Takeout TCX and
   session JSON, FIT, GPX, zips inside the folder), shows sensors per file,
   compares with a Strava export zip (exact and partial matches), lets David
   fix the sport, mark files as added to Strava (kept in localStorage, with a
